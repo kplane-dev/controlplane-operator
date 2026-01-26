@@ -34,13 +34,13 @@ import (
 )
 
 // namespace where the project is deployed in
-const namespace = "controlplane-operator-system"
+const namespace = "kplane-system"
 
 // serviceAccountName created for the project
-const serviceAccountName = "controlplane-operator-controller-manager"
+const serviceAccountName = "kplane-controlplane-controller-manager"
 
 // metricsServiceName is the name of the metrics service of the project
-const metricsServiceName = "controlplane-operator-controller-manager-metrics-service"
+const metricsServiceName = "kplane-controlplane-controller-manager-metrics-service"
 
 // metricsRoleBindingName is the name of the RBAC that will be created to allow get the metrics data
 const metricsRoleBindingName = "controlplane-operator-metrics-binding"
@@ -53,9 +53,13 @@ var _ = Describe("Manager", Ordered, func() {
 	// and deploying the controller.
 	BeforeAll(func() {
 		By("creating manager namespace")
-		cmd := exec.Command("kubectl", "create", "ns", namespace)
+		cmd := exec.Command("kubectl", "get", "ns", namespace)
 		_, err := utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to create namespace")
+		if err != nil {
+			cmd = exec.Command("kubectl", "create", "ns", namespace)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to create namespace")
+		}
 
 		By("labeling the namespace to enforce the restricted security policy")
 		cmd = exec.Command("kubectl", "label", "--overwrite", "ns", namespace,
