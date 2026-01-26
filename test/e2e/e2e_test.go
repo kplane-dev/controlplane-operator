@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -66,6 +67,36 @@ var _ = Describe("Manager", Ordered, func() {
 			"pod-security.kubernetes.io/enforce=restricted")
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to label namespace with restricted policy")
+
+		By("creating operator config configmap")
+		cmd = exec.Command("kubectl", "create", "configmap", "operator-config",
+			"--from-file=operatorconfig.yaml=config/operatorconfig.yaml",
+			"-n", namespace,
+			"--dry-run=client",
+			"-o", "yaml",
+		)
+		cmYAML, err := utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred(), "Failed to render operator-config ConfigMap")
+		applyKubectlYAML(cmYAML)
+
+		By("creating apiserver kubeconfig secret")
+		cmd = exec.Command("kubectl", "config", "view", "--raw", "--minify")
+		kubeconfig, err := utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred(), "Failed to read kubeconfig")
+		tmpFile, err := os.CreateTemp("", "kplane-kubeconfig-*.yaml")
+		Expect(err).NotTo(HaveOccurred(), "Failed to create kubeconfig temp file")
+		_, err = tmpFile.WriteString(kubeconfig)
+		Expect(err).NotTo(HaveOccurred(), "Failed to write kubeconfig")
+		Expect(tmpFile.Close()).To(Succeed())
+		cmd = exec.Command("kubectl", "create", "secret", "generic", "apiserver-kubeconfig",
+			fmt.Sprintf("--from-file=kubeconfig=%s", tmpFile.Name()),
+			"-n", namespace,
+			"--dry-run=client",
+			"-o", "yaml",
+		)
+		secretYAML, err := utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred(), "Failed to render apiserver-kubeconfig Secret")
+		applyKubectlYAML(secretYAML)
 
 		By("installing CRDs")
 		cmd = exec.Command("make", "install")
@@ -280,6 +311,13 @@ var _ = Describe("Manager", Ordered, func() {
 		// ))
 	})
 })
+
+func applyKubectlYAML(yaml string) {
+	cmd := exec.Command("kubectl", "apply", "-f", "-")
+	cmd.Stdin = strings.NewReader(yaml)
+	_, err := utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to apply manifest")
+}
 
 // serviceAccountToken returns a token for the specified service account in the given namespace.
 // It uses the Kubernetes TokenRequest API to generate a token by directly sending a request
