@@ -1,0 +1,15 @@
+apiVersion: controlplane.kplane.dev/v1alpha1
+kind: ControlPlane
+metadata:
+  labels:
+    app.kubernetes.io/name: controlplane-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: controlplane-sample
+spec:
+  classRef:
+    name: starter
+  endpointRef:
+    name: controlplane-sample-endpoint
+  mode: Virtual
+  virtual:
+    clusterPath: acme

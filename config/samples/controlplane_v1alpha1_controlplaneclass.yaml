@@ -1,0 +1,15 @@
+apiVersion: controlplane.kplane.dev/v1alpha1
+kind: ControlPlaneClass
+metadata:
+  labels:
+    app.kubernetes.io/name: controlplane-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: starter
+spec:
+  addons:
+    - starter
+  auth:
+    model: basic
+    defaultRole: admin
+  modesAllowed:
+    - Virtual
