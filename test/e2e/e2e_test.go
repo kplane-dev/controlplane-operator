@@ -44,7 +44,10 @@ const serviceAccountName = "kplane-controlplane-controller-manager"
 const metricsServiceName = "kplane-controlplane-controller-manager-metrics-service"
 
 // metricsRoleBindingName is the name of the RBAC that will be created to allow get the metrics data
-const metricsRoleBindingName = "controlplane-operator-metrics-binding"
+const metricsRoleBindingName = "kplane-controlplane-metrics-binding"
+
+// metricsReaderClusterRoleName is the ClusterRole used to read metrics
+const metricsReaderClusterRoleName = "kplane-controlplane-metrics-reader"
 
 var _ = Describe("Manager", Ordered, func() {
 	var controllerPodName string
@@ -211,7 +214,7 @@ var _ = Describe("Manager", Ordered, func() {
 		It("should ensure the metrics endpoint is serving metrics", func() {
 			By("creating a ClusterRoleBinding for the service account to allow access to metrics")
 			cmd := exec.Command("kubectl", "create", "clusterrolebinding", metricsRoleBindingName,
-				"--clusterrole=controlplane-operator-metrics-reader",
+				fmt.Sprintf("--clusterrole=%s", metricsReaderClusterRoleName),
 				fmt.Sprintf("--serviceaccount=%s:%s", namespace, serviceAccountName),
 			)
 			_, err := utils.Run(cmd)
