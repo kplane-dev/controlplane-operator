@@ -104,9 +104,7 @@ func (r *ControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	if controlPlane.DeletionTimestamp != nil {
 		if controllerutil.ContainsFinalizer(&controlPlane, controlPlaneFinalizer) {
-			if err := r.reconcileDelete(ctx, &controlPlane); err != nil {
-				return ctrl.Result{}, err
-			}
+			r.reconcileDelete(ctx, &controlPlane)
 			controllerutil.RemoveFinalizer(&controlPlane, controlPlaneFinalizer)
 			if err := r.Update(ctx, &controlPlane); err != nil {
 				return ctrl.Result{}, err
@@ -165,7 +163,7 @@ func (r *ControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, err
 	}
 
-	if err := r.bootstrapVirtualCluster(ctx, clusterClient, clusterPath); err != nil {
+	if err := r.bootstrapVirtualCluster(ctx, clusterClient); err != nil {
 		if isAPIServerNotReady(err) {
 			_, _ = r.updateStatus(ctx, &controlPlane, "", nil, conditionReady(
 				metav1.ConditionFalse,
@@ -316,7 +314,7 @@ func (r *ControlPlaneReconciler) ensureManagementNamespace(ctx context.Context, 
 	return r.Create(ctx, &namespace)
 }
 
-func (r *ControlPlaneReconciler) reconcileDelete(ctx context.Context, controlPlane *controlplanev1alpha1.ControlPlane) error {
+func (r *ControlPlaneReconciler) reconcileDelete(ctx context.Context, controlPlane *controlplanev1alpha1.ControlPlane) {
 	if endpoint, err := r.resolveEndpoint(ctx, controlPlane); err == nil {
 		if clusterClient, err := r.clusterClientForEndpoint(endpoint); err == nil {
 			_ = clusterClient.CoreV1().ServiceAccounts(r.virtualAdminNamespace()).Delete(ctx, r.virtualAdminSAName(), metav1.DeleteOptions{})
@@ -329,7 +327,6 @@ func (r *ControlPlaneReconciler) reconcileDelete(ctx context.Context, controlPla
 	_ = r.Delete(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: secretName, Namespace: secretNamespace}})
 
 	_ = r.Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: secretNamespace}})
-	return nil
 }
 
 func (r *ControlPlaneReconciler) resolveEndpoint(ctx context.Context, controlPlane *controlplanev1alpha1.ControlPlane) (string, error) {
@@ -367,7 +364,7 @@ func (r *ControlPlaneReconciler) clusterClientForEndpoint(endpoint string) (*kub
 	return kubernetes.NewForConfig(cfg)
 }
 
-func (r *ControlPlaneReconciler) bootstrapVirtualCluster(ctx context.Context, clientset *kubernetes.Clientset, clusterPath string) error {
+func (r *ControlPlaneReconciler) bootstrapVirtualCluster(ctx context.Context, clientset *kubernetes.Clientset) error {
 	adminNS := r.virtualAdminNamespace()
 	requiredNamespaces := []string{
 		"default",
@@ -580,13 +577,13 @@ func buildKubeconfig(cfg *rest.Config, endpoint, token string) ([]byte, error) {
 }
 
 func caDataFromConfig(cfg *rest.Config) ([]byte, error) {
-	if len(cfg.TLSClientConfig.CAData) > 0 {
-		return cfg.TLSClientConfig.CAData, nil
+	if len(cfg.CAData) > 0 {
+		return cfg.CAData, nil
 	}
-	if cfg.TLSClientConfig.CAFile == "" {
+	if cfg.CAFile == "" {
 		return nil, nil
 	}
-	data, err := os.ReadFile(cfg.TLSClientConfig.CAFile)
+	data, err := os.ReadFile(cfg.CAFile)
 	if err != nil {
 		return nil, err
 	}
