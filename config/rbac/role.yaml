@@ -29,6 +29,7 @@ rules:
 - apiGroups:
   - controlplane.kplane.dev
   resources:
+  - controlplaneregistrations
   - controlplanes
   verbs:
   - create
@@ -41,12 +42,14 @@ rules:
 - apiGroups:
   - controlplane.kplane.dev
   resources:
+  - controlplaneregistrations/finalizers
   - controlplanes/finalizers
   verbs:
   - update
 - apiGroups:
   - controlplane.kplane.dev
   resources:
+  - controlplaneregistrations/status
   - controlplanes/status
   verbs:
   - get

@@ -4,3 +4,5 @@ metadata:
   name: controlplane-sample-endpoint
 spec:
   endpoint: https://kplane-apiserver.kplane-system.svc.cluster.local:6443/clusters/acme/control-plane
+  externalEndpoint: https://kplane.example:30443/clusters/acme/control-plane
+  joinEndpoint: https://acme.join.kplane.example:30443/clusters/acme/control-plane

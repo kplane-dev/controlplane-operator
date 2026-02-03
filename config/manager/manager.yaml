@@ -102,6 +102,9 @@ spec:
         - name: apiserver-kubeconfig
           mountPath: /etc/kplane/kubeconfig
           readOnly: true
+        - name: cluster-signing-keys
+          mountPath: /var/run/kplane/cluster-signing
+          readOnly: true
       volumes:
       - name: operator-config
         configMap:
@@ -109,5 +112,8 @@ spec:
       - name: apiserver-kubeconfig
         secret:
           secretName: apiserver-kubeconfig
+      - name: cluster-signing-keys
+        secret:
+          secretName: kplane-cluster-signing-keys
       serviceAccountName: controller-manager
       terminationGracePeriodSeconds: 10

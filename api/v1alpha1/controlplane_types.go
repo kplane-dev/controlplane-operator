@@ -33,6 +33,15 @@ const (
 	ControlPlaneModeDedicated ControlPlaneMode = "Dedicated"
 )
 
+// DeletionPolicy controls what happens to the virtual control plane data on delete.
+// +kubebuilder:validation:Enum=Retain;Destroy
+type DeletionPolicy string
+
+const (
+	DeletionPolicyRetain  DeletionPolicy = "Retain"
+	DeletionPolicyDestroy DeletionPolicy = "Destroy"
+)
+
 // ControlPlaneSpec defines the desired state of ControlPlane.
 type ControlPlaneSpec struct {
 	// classRef is the ControlPlaneClass used to apply defaults and policy.
@@ -47,6 +56,11 @@ type ControlPlaneSpec struct {
 	// endpointRef references a ControlPlaneEndpoint that provides the API endpoint.
 	// +optional
 	EndpointRef *ControlPlaneEndpointReference `json:"endpointRef,omitempty"`
+
+	// deletionPolicy controls whether to retain or destroy the virtual control plane data on delete.
+	// Retain preserves the cluster data; Destroy removes it.
+	// +optional
+	DeletionPolicy DeletionPolicy `json:"deletionPolicy,omitempty"`
 
 	// virtual configures virtual control planes served by the shared apiserver.
 	// +optional

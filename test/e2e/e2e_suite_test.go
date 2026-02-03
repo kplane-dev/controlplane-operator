@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -43,6 +44,9 @@ var (
 	// projectImage is the name of the image which will be build and loaded
 	// with the code source changes to be tested.
 	projectImage = "example.com/controlplane-operator:v0.0.1"
+
+	apiserverImage   = "kplane-dev/apiserver:v0.0.2"
+	apiserverRepoDir = "/Users/zach/repos/kplane-dev/apiserver"
 )
 
 // TestE2E runs the end-to-end (e2e) test suite for the project. These tests execute in an isolated,
@@ -56,9 +60,37 @@ func TestE2E(t *testing.T) {
 }
 
 var _ = BeforeSuite(func() {
+	if repoDir := os.Getenv("APISERVER_REPO_DIR"); repoDir != "" {
+		apiserverRepoDir = repoDir
+	}
+
+	By("building the apiserver binary for Kind")
+	apiserverArch := runtime.GOARCH
+	if v := os.Getenv("APISERVER_ARCH"); v != "" {
+		apiserverArch = v
+	}
+	apiserverBinary := fmt.Sprintf(".dev/bin/apiserver-linux-%s", apiserverArch)
+	cmd := exec.Command("go", "build", "-o", apiserverBinary, "./cmd/apiserver")
+	cmd.Env = append(os.Environ(), "GOOS=linux", fmt.Sprintf("GOARCH=%s", apiserverArch))
+	cmd.Dir = apiserverRepoDir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to build apiserver binary: %s", string(output))
+	}
+
+	By("building the apiserver image")
+	cmd = exec.Command("docker", "build", "-t", apiserverImage, ".")
+	cmd.Dir = apiserverRepoDir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to build apiserver image: %s", string(output))
+	}
+
+	By("loading the apiserver image on Kind")
+	err := utils.LoadImageToKindClusterWithName(apiserverImage)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to load apiserver image into Kind")
+
 	By("building the manager(Operator) image")
-	cmd := exec.Command("make", "docker-build", fmt.Sprintf("IMG=%s", projectImage))
-	_, err := utils.Run(cmd)
+	cmd = exec.Command("make", "docker-build", fmt.Sprintf("IMG=%s", projectImage))
+	_, err = utils.Run(cmd)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to build the manager(Operator) image")
 
 	// TODO(user): If you want to change the e2e test vendor from Kind, ensure the image is

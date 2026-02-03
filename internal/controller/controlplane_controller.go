@@ -19,12 +19,15 @@ package controller
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"time"
 
+	clientv3 "go.etcd.io/etcd/client/v3"
 	authv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -33,6 +36,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	utilrand "k8s.io/apimachinery/pkg/util/rand"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -74,6 +78,7 @@ type ControlPlaneReconciler struct {
 //
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.22.1/pkg/reconcile
+// nolint:gocyclo
 func (r *ControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
@@ -87,24 +92,21 @@ func (r *ControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		mode = controlplanev1alpha1.ControlPlaneModeVirtual
 	}
 
-	clusterPath := controlPlane.Name
-	if controlPlane.Spec.Virtual != nil && controlPlane.Spec.Virtual.ClusterPath != "" {
-		clusterPath = controlPlane.Spec.Virtual.ClusterPath
-	}
-
-	if errs := validation.IsDNS1123Label(clusterPath); len(errs) > 0 {
-		msg := strings.Join(errs, "; ")
-		log.Error(fmt.Errorf("invalid cluster path"), "clusterPath validation failed", "clusterPath", clusterPath)
+	clusterPath, err := clusterPathForControlPlane(&controlPlane)
+	if err != nil {
+		log.Error(err, "clusterPath validation failed", "clusterPath", clusterPath)
 		return r.updateStatus(ctx, &controlPlane, "", nil, conditionReady(
 			metav1.ConditionFalse,
 			"InvalidClusterPath",
-			msg,
+			err.Error(),
 		))
 	}
 
 	if controlPlane.DeletionTimestamp != nil {
 		if controllerutil.ContainsFinalizer(&controlPlane, controlPlaneFinalizer) {
-			r.reconcileDelete(ctx, &controlPlane)
+			if err := r.reconcileDelete(ctx, &controlPlane); err != nil {
+				return ctrl.Result{}, err
+			}
 			controllerutil.RemoveFinalizer(&controlPlane, controlPlaneFinalizer)
 			if err := r.Update(ctx, &controlPlane); err != nil {
 				return ctrl.Result{}, err
@@ -125,8 +127,8 @@ func (r *ControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	if controlPlane.Spec.ClassRef != nil && controlPlane.Spec.ClassRef.Name != "" {
-		var class controlplanev1alpha1.ControlPlaneClass
-		if err := r.Get(ctx, client.ObjectKey{Name: controlPlane.Spec.ClassRef.Name}, &class); err != nil {
+		var classObj controlplanev1alpha1.ControlPlaneClass
+		if err := r.Get(ctx, client.ObjectKey{Name: controlPlane.Spec.ClassRef.Name}, &classObj); err != nil {
 			if apierrors.IsNotFound(err) {
 				return r.updateStatus(ctx, &controlPlane, "", nil, conditionReady(
 					metav1.ConditionFalse,
@@ -158,12 +160,33 @@ func (r *ControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		}
 		return ctrl.Result{}, err
 	}
+	externalEndpoint, err := r.resolveExternalEndpoint(ctx, &controlPlane)
+	if err != nil && !apierrors.IsNotFound(err) {
+		return ctrl.Result{}, err
+	}
+	if externalEndpoint == "" {
+		externalEndpoint = endpoint
+	}
+
+	joinEndpoint, err := r.resolveJoinEndpoint(ctx, &controlPlane)
+	if err != nil && !apierrors.IsNotFound(err) {
+		return ctrl.Result{}, err
+	}
+	if joinEndpoint == "" {
+		joinEndpoint = externalEndpoint
+	}
+
+	sharedCA, err := r.sharedCAData(ctx)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
 	clusterClient, err := r.clusterClientForEndpoint(endpoint)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 
-	if err := r.bootstrapVirtualCluster(ctx, clusterClient); err != nil {
+	if err := r.bootstrapVirtualCluster(ctx, clusterClient, joinEndpoint, sharedCA); err != nil {
 		if isAPIServerNotReady(err) {
 			_, _ = r.updateStatus(ctx, &controlPlane, "", nil, conditionReady(
 				metav1.ConditionFalse,
@@ -196,12 +219,25 @@ func (r *ControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, err
 	}
 
-	kubeconfigBytes, err := buildKubeconfig(r.ClusterConfig, endpoint, token)
+	internalKubeconfig, err := buildKubeconfig(r.ClusterConfig, endpoint, token)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 
-	secretRef, err := r.upsertKubeconfigSecret(ctx, &controlPlane, kubeconfigBytes)
+	var externalKubeconfig []byte
+	if len(sharedCA) > 0 {
+		externalKubeconfig, err = buildKubeconfigWithCA(r.ClusterConfig, externalEndpoint, token, sharedCA)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+	} else {
+		externalKubeconfig, err = buildKubeconfig(r.ClusterConfig, externalEndpoint, token)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
+	secretRef, err := r.upsertKubeconfigSecret(ctx, &controlPlane, internalKubeconfig, externalKubeconfig)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -269,6 +305,9 @@ const (
 	defaultAdminNamespace = "kplane-system"
 	defaultAdminSAName    = "controlplane-admin"
 	defaultAdminCRBName   = "controlplane-admin"
+	clusterSigningSecret  = "kplane-cluster-signing-keys"
+	clusterSigningCAKey   = "ca.crt"
+	clusterSigningCAFile  = "/var/run/kplane/cluster-signing/ca.crt"
 	endpointRefIndexKey   = ".spec.endpointRef.name"
 	classRefIndexKey      = ".spec.classRef.name"
 )
@@ -314,19 +353,36 @@ func (r *ControlPlaneReconciler) ensureManagementNamespace(ctx context.Context, 
 	return r.Create(ctx, &namespace)
 }
 
-func (r *ControlPlaneReconciler) reconcileDelete(ctx context.Context, controlPlane *controlplanev1alpha1.ControlPlane) {
-	if endpoint, err := r.resolveEndpoint(ctx, controlPlane); err == nil {
-		if clusterClient, err := r.clusterClientForEndpoint(endpoint); err == nil {
-			_ = clusterClient.CoreV1().ServiceAccounts(r.virtualAdminNamespace()).Delete(ctx, r.virtualAdminSAName(), metav1.DeleteOptions{})
-			_ = clusterClient.RbacV1().ClusterRoleBindings().Delete(ctx, r.virtualAdminCRBName(), metav1.DeleteOptions{})
+func (r *ControlPlaneReconciler) reconcileDelete(ctx context.Context, controlPlane *controlplanev1alpha1.ControlPlane) error {
+	log := logf.FromContext(ctx)
+	clusterPath, _ := clusterPathForControlPlane(controlPlane)
+
+	policy := deletionPolicyFor(controlPlane, nil)
+	if controlPlane.Spec.ClassRef != nil && controlPlane.Spec.ClassRef.Name != "" {
+		var class controlplanev1alpha1.ControlPlaneClass
+		if err := r.Get(ctx, client.ObjectKey{Name: controlPlane.Spec.ClassRef.Name}, &class); err == nil {
+			policy = deletionPolicyFor(controlPlane, &class)
+		}
+	}
+
+	if policy == controlplanev1alpha1.DeletionPolicyDestroy {
+		if endpoint, err := r.resolveEndpoint(ctx, controlPlane); err == nil {
+			if clusterClient, err := r.clusterClientForEndpoint(endpoint); err == nil {
+				_ = clusterClient.CoreV1().ServiceAccounts(r.virtualAdminNamespace()).Delete(ctx, r.virtualAdminSAName(), metav1.DeleteOptions{})
+				_ = clusterClient.RbacV1().ClusterRoleBindings().Delete(ctx, r.virtualAdminCRBName(), metav1.DeleteOptions{})
+			}
+		}
+		if err := r.destroyClusterData(ctx, clusterPath); err != nil {
+			log.Error(err, "failed to destroy cluster data", "clusterPath", clusterPath)
+			return err
 		}
 	}
 
 	secretName := kubeconfigSecretName(controlPlane.Name)
 	secretNamespace := r.managementNamespace(controlPlane)
 	_ = r.Delete(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: secretName, Namespace: secretNamespace}})
-
 	_ = r.Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: secretNamespace}})
+	return nil
 }
 
 func (r *ControlPlaneReconciler) resolveEndpoint(ctx context.Context, controlPlane *controlplanev1alpha1.ControlPlane) (string, error) {
@@ -354,6 +410,74 @@ func (r *ControlPlaneReconciler) resolveEndpoint(ctx context.Context, controlPla
 	}, fmt.Sprintf("endpoint %q is empty", ref.Name))
 }
 
+func (r *ControlPlaneReconciler) resolveExternalEndpoint(ctx context.Context, controlPlane *controlplanev1alpha1.ControlPlane) (string, error) {
+	ref := controlPlane.Spec.EndpointRef
+	if ref == nil || ref.Name == "" {
+		return "", apierrors.NewNotFound(schema.GroupResource{
+			Group:    controlplanev1alpha1.GroupVersion.Group,
+			Resource: "controlplaneendpoints",
+		}, "endpointRef not set")
+	}
+
+	var endpoint controlplanev1alpha1.ControlPlaneEndpoint
+	if err := r.Get(ctx, client.ObjectKey{Name: ref.Name}, &endpoint); err != nil {
+		return "", err
+	}
+	if endpoint.Status.ExternalEndpoint != "" {
+		return endpoint.Status.ExternalEndpoint, nil
+	}
+	if endpoint.Spec.ExternalEndpoint != "" {
+		return endpoint.Spec.ExternalEndpoint, nil
+	}
+	if endpoint.Status.Endpoint != "" {
+		return endpoint.Status.Endpoint, nil
+	}
+	if endpoint.Spec.Endpoint != "" {
+		return endpoint.Spec.Endpoint, nil
+	}
+	return "", apierrors.NewNotFound(schema.GroupResource{
+		Group:    controlplanev1alpha1.GroupVersion.Group,
+		Resource: "controlplaneendpoints",
+	}, fmt.Sprintf("endpoint %q is empty", ref.Name))
+}
+
+func (r *ControlPlaneReconciler) resolveJoinEndpoint(ctx context.Context, controlPlane *controlplanev1alpha1.ControlPlane) (string, error) {
+	ref := controlPlane.Spec.EndpointRef
+	if ref == nil || ref.Name == "" {
+		return "", apierrors.NewNotFound(schema.GroupResource{
+			Group:    controlplanev1alpha1.GroupVersion.Group,
+			Resource: "controlplaneendpoints",
+		}, "endpointRef not set")
+	}
+
+	var endpoint controlplanev1alpha1.ControlPlaneEndpoint
+	if err := r.Get(ctx, client.ObjectKey{Name: ref.Name}, &endpoint); err != nil {
+		return "", err
+	}
+	if endpoint.Status.JoinEndpoint != "" {
+		return endpoint.Status.JoinEndpoint, nil
+	}
+	if endpoint.Spec.JoinEndpoint != "" {
+		return endpoint.Spec.JoinEndpoint, nil
+	}
+	if endpoint.Status.ExternalEndpoint != "" {
+		return endpoint.Status.ExternalEndpoint, nil
+	}
+	if endpoint.Spec.ExternalEndpoint != "" {
+		return endpoint.Spec.ExternalEndpoint, nil
+	}
+	if endpoint.Status.Endpoint != "" {
+		return endpoint.Status.Endpoint, nil
+	}
+	if endpoint.Spec.Endpoint != "" {
+		return endpoint.Spec.Endpoint, nil
+	}
+	return "", apierrors.NewNotFound(schema.GroupResource{
+		Group:    controlplanev1alpha1.GroupVersion.Group,
+		Resource: "controlplaneendpoints",
+	}, fmt.Sprintf("endpoint %q is empty", ref.Name))
+}
+
 func (r *ControlPlaneReconciler) clusterClientForEndpoint(endpoint string) (*kubernetes.Clientset, error) {
 	base := r.ClusterConfig
 	if base == nil {
@@ -364,7 +488,7 @@ func (r *ControlPlaneReconciler) clusterClientForEndpoint(endpoint string) (*kub
 	return kubernetes.NewForConfig(cfg)
 }
 
-func (r *ControlPlaneReconciler) bootstrapVirtualCluster(ctx context.Context, clientset *kubernetes.Clientset) error {
+func (r *ControlPlaneReconciler) bootstrapVirtualCluster(ctx context.Context, clientset *kubernetes.Clientset, endpoint string, caData []byte) error {
 	adminNS := r.virtualAdminNamespace()
 	requiredNamespaces := []string{
 		"default",
@@ -408,7 +532,7 @@ func (r *ControlPlaneReconciler) bootstrapVirtualCluster(ctx context.Context, cl
 		return err
 	}
 
-	return nil
+	return r.ensureBootstrapArtifacts(ctx, clientset, endpoint, caData)
 }
 
 func ensureNamespace(ctx context.Context, clientset *kubernetes.Clientset, name string) error {
@@ -438,7 +562,7 @@ func (r *ControlPlaneReconciler) issueAdminToken(ctx context.Context, clientset 
 	return token.Status.Token, nil
 }
 
-func (r *ControlPlaneReconciler) upsertKubeconfigSecret(ctx context.Context, controlPlane *controlplanev1alpha1.ControlPlane, kubeconfig []byte) (*corev1.SecretReference, error) {
+func (r *ControlPlaneReconciler) upsertKubeconfigSecret(ctx context.Context, controlPlane *controlplanev1alpha1.ControlPlane, internalKubeconfig, externalKubeconfig []byte) (*corev1.SecretReference, error) {
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      kubeconfigSecretName(controlPlane.Name),
@@ -454,7 +578,10 @@ func (r *ControlPlaneReconciler) upsertKubeconfigSecret(ctx context.Context, con
 		if secret.Data == nil {
 			secret.Data = map[string][]byte{}
 		}
-		secret.Data["kubeconfig"] = kubeconfig
+		secret.Data["kubeconfig"] = internalKubeconfig
+		if len(externalKubeconfig) > 0 {
+			secret.Data["kubeconfig-external"] = externalKubeconfig
+		}
 		return controllerutil.SetControllerReference(controlPlane, secret, r.Scheme)
 	})
 	if err != nil {
@@ -542,12 +669,19 @@ func kubeconfigSecretName(name string) string {
 }
 
 func buildKubeconfig(cfg *rest.Config, endpoint, token string) ([]byte, error) {
+	return buildKubeconfigWithCA(cfg, endpoint, token, nil)
+}
+
+func buildKubeconfigWithCA(cfg *rest.Config, endpoint, token string, caData []byte) ([]byte, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("config is required")
 	}
-	caData, err := caDataFromConfig(cfg)
-	if err != nil {
-		return nil, err
+	if len(caData) == 0 {
+		var err error
+		caData, err = caDataFromConfig(cfg)
+		if err != nil {
+			return nil, err
+		}
 	}
 	clusterName := "controlplane"
 	userName := "admin"
@@ -557,7 +691,7 @@ func buildKubeconfig(cfg *rest.Config, endpoint, token string) ([]byte, error) {
 			clusterName: {
 				Server:                   endpoint,
 				CertificateAuthorityData: caData,
-				InsecureSkipTLSVerify:    cfg.Insecure,
+				InsecureSkipTLSVerify:    cfg.Insecure && len(caData) == 0,
 			},
 		},
 		AuthInfos: map[string]*api.AuthInfo{
@@ -588,4 +722,477 @@ func caDataFromConfig(cfg *rest.Config) ([]byte, error) {
 		return nil, err
 	}
 	return data, nil
+}
+
+func (r *ControlPlaneReconciler) sharedCAData(ctx context.Context) ([]byte, error) {
+	var secret corev1.Secret
+	if err := r.Get(ctx, client.ObjectKey{Namespace: r.virtualAdminNamespace(), Name: clusterSigningSecret}, &secret); err != nil {
+		if apierrors.IsNotFound(err) {
+			if data, fileErr := os.ReadFile(clusterSigningCAFile); fileErr == nil && len(data) > 0 {
+				return data, nil
+			}
+			// Fall back to manager config CA data if available.
+			return caDataFromConfig(r.ClusterConfig)
+		}
+		return nil, err
+	}
+	data := secret.Data[clusterSigningCAKey]
+	if len(data) == 0 {
+		if fileData, fileErr := os.ReadFile(clusterSigningCAFile); fileErr == nil && len(fileData) > 0 {
+			return fileData, nil
+		}
+		return nil, fmt.Errorf("missing %s in secret %s/%s", clusterSigningCAKey, secret.Namespace, secret.Name)
+	}
+	return data, nil
+}
+
+func (r *ControlPlaneReconciler) ensureBootstrapArtifacts(ctx context.Context, clientset *kubernetes.Clientset, endpoint string, caData []byte) error {
+	host := endpointHost(endpoint)
+	if host == "" {
+		return fmt.Errorf("invalid endpoint %q: missing host", endpoint)
+	}
+
+	if err := ensureKubeadmConfig(ctx, clientset, host); err != nil {
+		return err
+	}
+	if err := ensureKubeletConfig(ctx, clientset); err != nil {
+		return err
+	}
+	if err := ensureClusterInfo(ctx, clientset, endpoint, caData); err != nil {
+		return err
+	}
+	if err := ensureBootstrapToken(ctx, clientset); err != nil {
+		return err
+	}
+	return ensureBootstrapRBAC(ctx, clientset)
+}
+
+func endpointHost(endpoint string) string {
+	parsed, err := url.Parse(endpoint)
+	if err == nil && parsed.Host != "" {
+		return parsed.Host
+	}
+	return ""
+}
+
+func ensureKubeadmConfig(ctx context.Context, clientset *kubernetes.Clientset, host string) error {
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "kubeadm-config",
+			Namespace: "kube-system",
+		},
+		Data: map[string]string{
+			"ClusterConfiguration": fmt.Sprintf(`apiVersion: kubeadm.k8s.io/v1beta3
+kind: ClusterConfiguration
+clusterName: virtual
+controlPlaneEndpoint: %s
+`, host),
+		},
+	}
+	_, err := clientset.CoreV1().ConfigMaps("kube-system").Create(ctx, cm, metav1.CreateOptions{})
+	if err != nil && !apierrors.IsAlreadyExists(err) {
+		return err
+	}
+	return nil
+}
+
+func ensureKubeletConfig(ctx context.Context, clientset *kubernetes.Clientset) error {
+	kubeletConfig := `apiVersion: kubelet.config.k8s.io/v1beta1
+kind: KubeletConfiguration
+failSwapOn: false
+serverTLSBootstrap: true
+`
+	cmClient := clientset.CoreV1().ConfigMaps("kube-system")
+	cm, err := cmClient.Get(ctx, "kubelet-config", metav1.GetOptions{})
+	if err != nil {
+		if !apierrors.IsNotFound(err) {
+			return err
+		}
+		cm = &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "kubelet-config",
+				Namespace: "kube-system",
+			},
+			Data: map[string]string{
+				"kubelet": kubeletConfig,
+			},
+		}
+		_, err = cmClient.Create(ctx, cm, metav1.CreateOptions{})
+		return err
+	}
+	if cm.Data == nil {
+		cm.Data = map[string]string{}
+	}
+	cm.Data["kubelet"] = kubeletConfig
+	_, err = cmClient.Update(ctx, cm, metav1.UpdateOptions{})
+	return err
+}
+
+func ensureClusterInfo(ctx context.Context, clientset *kubernetes.Clientset, endpoint string, caData []byte) error {
+	if len(caData) == 0 {
+		return fmt.Errorf("ca data is required for cluster-info")
+	}
+	kubeconfig := fmt.Sprintf(`apiVersion: v1
+kind: Config
+clusters:
+- name: cluster
+  cluster:
+    server: %s
+    certificate-authority-data: %s
+contexts:
+- name: cluster
+  context:
+    cluster: cluster
+    user: ""
+current-context: cluster
+users: []
+`, endpoint, encodeBase64(caData))
+
+	cmClient := clientset.CoreV1().ConfigMaps("kube-public")
+	cm, err := cmClient.Get(ctx, "cluster-info", metav1.GetOptions{})
+	if err != nil {
+		if !apierrors.IsNotFound(err) {
+			return err
+		}
+		cm = &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "cluster-info",
+				Namespace: "kube-public",
+			},
+			Data: map[string]string{
+				"kubeconfig": kubeconfig,
+			},
+		}
+		_, err = cmClient.Create(ctx, cm, metav1.CreateOptions{})
+		return err
+	}
+	if cm.Data == nil {
+		cm.Data = map[string]string{}
+	}
+	cm.Data["kubeconfig"] = kubeconfig
+	_, err = cmClient.Update(ctx, cm, metav1.UpdateOptions{})
+	return err
+}
+
+func ensureBootstrapToken(ctx context.Context, clientset *kubernetes.Clientset) error {
+	tokenID := utilrand.String(6)
+	tokenSecret := utilrand.String(16)
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "bootstrap-token-" + tokenID,
+			Namespace: "kube-system",
+		},
+		Type: "bootstrap.kubernetes.io/token",
+		StringData: map[string]string{
+			"token-id":                       tokenID,
+			"token-secret":                   tokenSecret,
+			"usage-bootstrap-authentication": "true",
+			"usage-bootstrap-signing":        "true",
+			"auth-extra-groups":              "system:bootstrappers,system:bootstrappers:kubeadm:default-node-token",
+		},
+	}
+	_, err := clientset.CoreV1().Secrets("kube-system").Create(ctx, secret, metav1.CreateOptions{})
+	if err != nil && !apierrors.IsAlreadyExists(err) {
+		return err
+	}
+	return nil
+}
+
+func ensureBootstrapRBAC(ctx context.Context, clientset *kubernetes.Clientset) error {
+	if err := ensurePublicInfoViewer(ctx, clientset); err != nil {
+		return err
+	}
+	if err := ensureKubeadmBootstrapperRole(ctx, clientset); err != nil {
+		return err
+	}
+	if err := ensureNodeRBAC(ctx, clientset); err != nil {
+		return err
+	}
+
+	clusterRole := &rbacv1.ClusterRole{
+		ObjectMeta: metav1.ObjectMeta{Name: "system:node-bootstrapper"},
+		Rules: []rbacv1.PolicyRule{
+			{
+				APIGroups: []string{"certificates.k8s.io"},
+				Resources: []string{"certificatesigningrequests", "certificatesigningrequests/nodeclient"},
+				Verbs:     []string{"create", "get", "list", "watch"},
+			},
+		},
+	}
+	_, err := clientset.RbacV1().ClusterRoles().Create(ctx, clusterRole, metav1.CreateOptions{})
+	if err != nil && !apierrors.IsAlreadyExists(err) {
+		return err
+	}
+
+	clusterRoleBinding := &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: "system:node-bootstrapper"},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: "rbac.authorization.k8s.io",
+			Kind:     "ClusterRole",
+			Name:     "system:node-bootstrapper",
+		},
+		Subjects: []rbacv1.Subject{
+			{
+				Kind: "Group",
+				Name: "system:bootstrappers",
+			},
+			{
+				Kind: "Group",
+				Name: "system:bootstrappers:kubeadm:default-node-token",
+			},
+		},
+	}
+	_, err = clientset.RbacV1().ClusterRoleBindings().Create(ctx, clusterRoleBinding, metav1.CreateOptions{})
+	if err != nil && !apierrors.IsAlreadyExists(err) {
+		return err
+	}
+
+	roleBinding := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "bootstrap-token-cluster-info",
+			Namespace: "kube-public",
+		},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: "rbac.authorization.k8s.io",
+			Kind:     "ClusterRole",
+			Name:     "system:public-info-viewer",
+		},
+		Subjects: []rbacv1.Subject{
+			{
+				Kind: "Group",
+				Name: "system:bootstrappers",
+			},
+			{
+				Kind: "Group",
+				Name: "system:bootstrappers:kubeadm:default-node-token",
+			},
+		},
+	}
+	_, err = clientset.RbacV1().RoleBindings("kube-public").Create(ctx, roleBinding, metav1.CreateOptions{})
+	if err != nil && !apierrors.IsAlreadyExists(err) {
+		return err
+	}
+	return nil
+}
+
+func ensurePublicInfoViewer(ctx context.Context, clientset *kubernetes.Clientset) error {
+	clusterRole := &rbacv1.ClusterRole{
+		ObjectMeta: metav1.ObjectMeta{Name: "system:public-info-viewer"},
+		Rules: []rbacv1.PolicyRule{
+			{
+				APIGroups: []string{""},
+				Resources: []string{"configmaps"},
+				Verbs:     []string{"get", "list", "watch"},
+			},
+		},
+	}
+	_, err := clientset.RbacV1().ClusterRoles().Create(ctx, clusterRole, metav1.CreateOptions{})
+	if err != nil && !apierrors.IsAlreadyExists(err) {
+		return err
+	}
+	return nil
+}
+
+func ensureKubeadmBootstrapperRole(ctx context.Context, clientset *kubernetes.Clientset) error {
+	role := &rbacv1.Role{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "kubeadm-bootstrapper",
+			Namespace: "kube-system",
+		},
+		Rules: []rbacv1.PolicyRule{
+			{
+				APIGroups: []string{""},
+				Resources: []string{"configmaps"},
+				Verbs:     []string{"get", "list"},
+			},
+		},
+	}
+	_, err := clientset.RbacV1().Roles("kube-system").Create(ctx, role, metav1.CreateOptions{})
+	if err != nil && !apierrors.IsAlreadyExists(err) {
+		return err
+	}
+
+	roleBinding := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "kubeadm-bootstrapper",
+			Namespace: "kube-system",
+		},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: "rbac.authorization.k8s.io",
+			Kind:     "Role",
+			Name:     "kubeadm-bootstrapper",
+		},
+		Subjects: []rbacv1.Subject{
+			{
+				Kind: "Group",
+				Name: "system:bootstrappers",
+			},
+			{
+				Kind: "Group",
+				Name: "system:bootstrappers:kubeadm:default-node-token",
+			},
+		},
+	}
+	_, err = clientset.RbacV1().RoleBindings("kube-system").Create(ctx, roleBinding, metav1.CreateOptions{})
+	if err != nil && !apierrors.IsAlreadyExists(err) {
+		return err
+	}
+	return nil
+}
+
+func ensureNodeRBAC(ctx context.Context, clientset *kubernetes.Clientset) error {
+	clusterRole := &rbacv1.ClusterRole{
+		ObjectMeta: metav1.ObjectMeta{Name: "system:node"},
+		Rules: []rbacv1.PolicyRule{
+			{
+				APIGroups: []string{""},
+				Resources: []string{"nodes"},
+				Verbs:     []string{"create", "get", "list", "watch", "update", "patch"},
+			},
+			{
+				APIGroups: []string{""},
+				Resources: []string{"nodes/status"},
+				Verbs:     []string{"update", "patch"},
+			},
+			{
+				APIGroups: []string{""},
+				Resources: []string{"pods"},
+				Verbs:     []string{"get", "list", "watch"},
+			},
+			{
+				APIGroups: []string{""},
+				Resources: []string{"pods/status"},
+				Verbs:     []string{"update", "patch"},
+			},
+			{
+				APIGroups: []string{""},
+				Resources: []string{"services", "endpoints", "configmaps", "secrets"},
+				Verbs:     []string{"get", "list", "watch"},
+			},
+			{
+				APIGroups: []string{"coordination.k8s.io"},
+				Resources: []string{"leases"},
+				Verbs:     []string{"get", "list", "watch", "create", "update", "patch"},
+			},
+			{
+				APIGroups: []string{"storage.k8s.io"},
+				Resources: []string{"csidrivers"},
+				Verbs:     []string{"get", "list", "watch"},
+			},
+			{
+				APIGroups: []string{"node.k8s.io"},
+				Resources: []string{"runtimeclasses"},
+				Verbs:     []string{"get", "list", "watch"},
+			},
+			{
+				APIGroups: []string{""},
+				Resources: []string{"events"},
+				Verbs:     []string{"create", "patch", "update"},
+			},
+		},
+	}
+	_, err := clientset.RbacV1().ClusterRoles().Create(ctx, clusterRole, metav1.CreateOptions{})
+	if err != nil && !apierrors.IsAlreadyExists(err) {
+		return err
+	}
+
+	clusterRoleBinding := &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: "system:nodes"},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: "rbac.authorization.k8s.io",
+			Kind:     "ClusterRole",
+			Name:     "system:node",
+		},
+		Subjects: []rbacv1.Subject{
+			{
+				Kind: "Group",
+				Name: "system:nodes",
+			},
+		},
+	}
+	_, err = clientset.RbacV1().ClusterRoleBindings().Create(ctx, clusterRoleBinding, metav1.CreateOptions{})
+	if err != nil && !apierrors.IsAlreadyExists(err) {
+		return err
+	}
+	return nil
+}
+
+func encodeBase64(data []byte) string {
+	if len(data) == 0 {
+		return ""
+	}
+	return base64.StdEncoding.EncodeToString(data)
+}
+
+func clusterPathForControlPlane(controlPlane *controlplanev1alpha1.ControlPlane) (string, error) {
+	clusterPath := controlPlane.Name
+	if controlPlane.Spec.Virtual != nil && controlPlane.Spec.Virtual.ClusterPath != "" {
+		clusterPath = controlPlane.Spec.Virtual.ClusterPath
+	}
+	if errs := validation.IsDNS1123Label(clusterPath); len(errs) > 0 {
+		msg := strings.Join(errs, "; ")
+		return clusterPath, fmt.Errorf("invalid cluster path %q: %s", clusterPath, msg)
+	}
+	return clusterPath, nil
+}
+
+func deletionPolicyFor(controlPlane *controlplanev1alpha1.ControlPlane, class *controlplanev1alpha1.ControlPlaneClass) controlplanev1alpha1.DeletionPolicy {
+	if controlPlane.Spec.DeletionPolicy != "" {
+		return controlPlane.Spec.DeletionPolicy
+	}
+	if class != nil && class.Spec.DeletionPolicy != nil && *class.Spec.DeletionPolicy != "" {
+		return *class.Spec.DeletionPolicy
+	}
+	return controlplanev1alpha1.DeletionPolicyRetain
+}
+
+func (r *ControlPlaneReconciler) destroyClusterData(ctx context.Context, clusterID string) error {
+	if len(r.Config.EtcdEndpoints) == 0 {
+		return fmt.Errorf("etcdEndpoints not configured for destroy deletion policy")
+	}
+	prefix := strings.TrimSuffix(r.Config.EtcdPrefix, "/")
+	if prefix == "" {
+		prefix = "/registry"
+	}
+	if !strings.HasPrefix(prefix, "/") {
+		prefix = "/" + prefix
+	}
+	keyPrefix := prefix + "/"
+	clusterSegment := "/clusters/" + clusterID + "/"
+
+	etcdClient, err := clientv3.New(clientv3.Config{
+		Endpoints:   r.Config.EtcdEndpoints,
+		DialTimeout: 5 * time.Second,
+	})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = etcdClient.Close()
+	}()
+
+	startKey := keyPrefix
+	deleted := 0
+	for {
+		resp, err := etcdClient.Get(ctx, startKey, clientv3.WithRange(clientv3.GetPrefixRangeEnd(keyPrefix)), clientv3.WithLimit(1000))
+		if err != nil {
+			return err
+		}
+		for _, kv := range resp.Kvs {
+			key := string(kv.Key)
+			if strings.Contains(key, clusterSegment) {
+				if _, err := etcdClient.Delete(ctx, key); err != nil {
+					return err
+				}
+				deleted++
+			}
+		}
+		if !resp.More {
+			break
+		}
+		startKey = string(resp.Kvs[len(resp.Kvs)-1].Key) + "\x00"
+	}
+
+	logf.FromContext(ctx).Info("destroyed cluster data", "clusterID", clusterID, "deletedKeys", deleted)
+	return nil
 }

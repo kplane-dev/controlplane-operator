@@ -49,6 +49,14 @@ spec:
                 description: endpoint is the desired API endpoint for this control
                   plane.
                 type: string
+              externalEndpoint:
+                description: externalEndpoint is the externally reachable API endpoint
+                  for this control plane.
+                type: string
+              joinEndpoint:
+                description: joinEndpoint is the externally reachable endpoint used
+                  for kubelet mTLS joins.
+                type: string
             type: object
           status:
             description: status defines the observed endpoint
@@ -116,6 +124,14 @@ spec:
               endpoint:
                 description: endpoint is the observed API endpoint for this control
                   plane.
+                type: string
+              externalEndpoint:
+                description: externalEndpoint is the observed externally reachable
+                  API endpoint.
+                type: string
+              joinEndpoint:
+                description: joinEndpoint is the observed externally reachable endpoint
+                  used for kubelet joins.
                 type: string
             type: object
         required:

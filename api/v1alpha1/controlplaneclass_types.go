@@ -29,6 +29,10 @@ type ControlPlaneClassSpec struct {
 	// +optional
 	Addons []string `json:"addons,omitempty"`
 
+	// deletionPolicy sets the default deletion behavior for control planes using this class.
+	// +optional
+	DeletionPolicy *DeletionPolicy `json:"deletionPolicy,omitempty"`
+
 	// auth configures default authentication/authorization posture.
 	// +optional
 	Auth *ControlPlaneClassAuthSpec `json:"auth,omitempty"`

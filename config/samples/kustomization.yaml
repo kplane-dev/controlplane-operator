@@ -2,4 +2,6 @@
 resources:
 - controlplane_v1alpha1_controlplane.yaml
 - controlplane_v1alpha1_controlplaneclass.yaml
+- controlplane_v1alpha1_controlplaneendpoint.yaml
+- controlplane_v1alpha1_controlplaneregistration.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

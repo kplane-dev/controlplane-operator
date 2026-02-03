@@ -110,6 +110,14 @@ spec:
                     type: object
                     x-kubernetes-map-type: atomic
                 type: object
+              deletionPolicy:
+                description: |-
+                  deletionPolicy controls whether to retain or destroy the virtual control plane data on delete.
+                  Retain preserves the cluster data; Destroy removes it.
+                enum:
+                - Retain
+                - Destroy
+                type: string
               endpointRef:
                 description: endpointRef references a ControlPlaneEndpoint that provides
                   the API endpoint.
