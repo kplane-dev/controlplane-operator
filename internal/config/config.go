@@ -12,6 +12,7 @@ const (
 	DefaultVirtualAdminServiceAccount = "controlplane-admin"
 	DefaultVirtualAdminCRBName        = "controlplane-admin"
 	DefaultMaxConcurrentReconciles    = 8
+	DefaultEtcdPrefix                 = "/registry"
 )
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -46,6 +47,14 @@ type OperatorConfig struct {
 	// maxConcurrentReconciles controls the number of parallel ControlPlane reconciles.
 	// +optional
 	MaxConcurrentReconciles int `json:"maxConcurrentReconciles,omitempty"`
+
+	// etcdEndpoints is used for Destroy deletionPolicy to wipe cluster data.
+	// +optional
+	EtcdEndpoints []string `json:"etcdEndpoints,omitempty"`
+
+	// etcdPrefix is the base key prefix in etcd (defaults to /registry).
+	// +optional
+	EtcdPrefix string `json:"etcdPrefix,omitempty"`
 }
 
 func init() {
@@ -84,5 +93,8 @@ func SetDefaults_OperatorConfig(cfg *OperatorConfig) {
 	}
 	if cfg.MaxConcurrentReconciles == 0 {
 		cfg.MaxConcurrentReconciles = DefaultMaxConcurrentReconciles
+	}
+	if cfg.EtcdPrefix == "" {
+		cfg.EtcdPrefix = DefaultEtcdPrefix
 	}
 }

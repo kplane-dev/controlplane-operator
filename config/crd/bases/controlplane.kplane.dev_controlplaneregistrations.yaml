@@ -4,20 +4,29 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.19.0
-  name: controlplaneclasses.controlplane.kplane.dev
+  name: controlplaneregistrations.controlplane.kplane.dev
 spec:
   group: controlplane.kplane.dev
   names:
-    kind: ControlPlaneClass
-    listKind: ControlPlaneClassList
-    plural: controlplaneclasses
-    singular: controlplaneclass
+    kind: ControlPlaneRegistration
+    listKind: ControlPlaneRegistrationList
+    plural: controlplaneregistrations
+    singular: controlplaneregistration
   scope: Cluster
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .status.resolvedEndpoint
+      name: Endpoint
+      priority: 1
+      type: string
+    - jsonPath: .status.ready
+      name: Ready
+      type: string
+    name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: ControlPlaneClass is the Schema for the controlplaneclasses API
+        description: ControlPlaneRegistration is the Schema for the controlplaneregistrations
+          API.
         properties:
           apiVersion:
             description: |-
@@ -37,57 +46,72 @@ spec:
           metadata:
             type: object
           spec:
-            description: spec defines the desired state of ControlPlaneClass
+            description: spec defines the desired state of ControlPlaneRegistration.
             properties:
-              addons:
-                description: addons is a list of named addon bundles to apply.
-                items:
-                  type: string
-                type: array
-              auth:
-                description: auth configures default authentication/authorization
-                  posture.
+              controlPlaneRef:
+                description: controlPlaneRef references the target ControlPlane.
                 properties:
-                  defaultRole:
-                    description: defaultRole is applied to bootstrap admin credentials.
-                    type: string
-                  model:
-                    description: model is a small string that can be interpreted by
-                      the operator in future.
+                  name:
+                    default: ""
+                    description: |-
+                      Name of the referent.
+                      This field is effectively required, but due to backwards compatibility is
+                      allowed to be empty. Instances of this type with an empty value here are
+                      almost certainly wrong.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
                     type: string
                 type: object
-              deletionPolicy:
-                description: deletionPolicy sets the default deletion behavior for
-                  control planes using this class.
+                x-kubernetes-map-type: atomic
+              endpointRef:
+                description: endpointRef optionally overrides which ControlPlaneEndpoint
+                  to use.
+                properties:
+                  name:
+                    description: name is the name of the ControlPlaneEndpoint.
+                    type: string
+                required:
+                - name
+                type: object
+              kubeconfigSecretRef:
+                description: kubeconfigSecretRef optionally overrides the kubeconfig
+                  secret used by consumers.
+                properties:
+                  name:
+                    description: name is unique within a namespace to reference a
+                      secret resource.
+                    type: string
+                  namespace:
+                    description: namespace defines the space within which the secret
+                      name must be unique.
+                    type: string
+                type: object
+                x-kubernetes-map-type: atomic
+              mode:
+                description: mode declares whether services should be shared or dedicated.
                 enum:
-                - Retain
-                - Destroy
+                - Shared
+                - Dedicated
                 type: string
-              modesAllowed:
-                description: modesAllowed restricts which control plane modes can
-                  use this class.
+              services:
+                description: services is the list of service intents for this control
+                  plane.
                 items:
-                  description: ControlPlaneMode declares the type of control plane.
+                  description: ControlPlaneRegistrationService declares a service
+                    intent for a control plane.
                   enum:
-                  - Virtual
-                  - Dedicated
+                  - Controllers
+                  - Scheduler
+                  - Workloads
                   type: string
                 type: array
+            required:
+            - controlPlaneRef
             type: object
           status:
-            description: status defines the observed state of ControlPlaneClass
+            description: status defines the observed state of ControlPlaneRegistration.
             properties:
               conditions:
-                description: |-
-                  conditions represent the current state of the ControlPlaneClass resource.
-                  Each condition has a unique type and reflects the status of a specific aspect of the resource.
-
-                  Standard condition types include:
-                  - "Available": the resource is fully functional
-                  - "Progressing": the resource is being created or updated
-                  - "Degraded": the resource failed to reach or maintain its desired state
-
-                  The status of each condition is one of True, False, or Unknown.
+                description: conditions represent the current state of the registration.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -146,6 +170,33 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              observedGeneration:
+                description: observedGeneration reflects the generation observed by
+                  the controller.
+                format: int64
+                type: integer
+              ready:
+                description: ready indicates whether the registration has a resolved
+                  endpoint and kubeconfig.
+                type: boolean
+              resolvedEndpoint:
+                description: resolvedEndpoint is the endpoint chosen after reference
+                  resolution.
+                type: string
+              resolvedKubeconfigSecretRef:
+                description: resolvedKubeconfigSecretRef is the final secret reference
+                  used by consumers.
+                properties:
+                  name:
+                    description: name is unique within a namespace to reference a
+                      secret resource.
+                    type: string
+                  namespace:
+                    description: namespace defines the space within which the secret
+                      name must be unique.
+                    type: string
+                type: object
+                x-kubernetes-map-type: atomic
             type: object
         required:
         - spec

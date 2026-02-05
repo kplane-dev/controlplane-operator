@@ -23,6 +23,14 @@ type ControlPlaneEndpointSpec struct {
 	// endpoint is the desired API endpoint for this control plane.
 	// +optional
 	Endpoint string `json:"endpoint,omitempty"`
+
+	// externalEndpoint is the externally reachable API endpoint for this control plane.
+	// +optional
+	ExternalEndpoint string `json:"externalEndpoint,omitempty"`
+
+	// joinEndpoint is the externally reachable endpoint used for kubelet mTLS joins.
+	// +optional
+	JoinEndpoint string `json:"joinEndpoint,omitempty"`
 }
 
 // ControlPlaneEndpointStatus defines the observed endpoint for a control plane.
@@ -30,6 +38,14 @@ type ControlPlaneEndpointStatus struct {
 	// endpoint is the observed API endpoint for this control plane.
 	// +optional
 	Endpoint string `json:"endpoint,omitempty"`
+
+	// externalEndpoint is the observed externally reachable API endpoint.
+	// +optional
+	ExternalEndpoint string `json:"externalEndpoint,omitempty"`
+
+	// joinEndpoint is the observed externally reachable endpoint used for kubelet joins.
+	// +optional
+	JoinEndpoint string `json:"joinEndpoint,omitempty"`
 
 	// conditions represent the current state of the endpoint.
 	// +listType=map

@@ -1,0 +1,85 @@
+name: release
+
+on:
+  release:
+    types: [created]
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  DOCKERHUB_REPO: ${{ secrets.DOCKERHUB_REPO }}
+  GO_VERSION: 1.24.6
+  BUILD_PLATFORMS: ${{ vars.BUILD_PLATFORMS || 'linux/amd64,linux/arm64' }}
+  GOFLAGS: -mod=mod
+  K8S_VERSION: ${{ vars.K8S_VERSION || 'v1.35.0' }}
+
+jobs:
+  build-and-push:
+    name: Build and push Docker image
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Ensure no Docker Hub session before base pulls
+        run: docker logout docker.io || true
+
+      - name: Login to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract version and tags
+        id: meta
+        run: |
+          tag_name="${{ github.event.release.tag_name }}"
+          if [ -z "$tag_name" ]; then
+            tag_name="${GITHUB_REF#refs/tags/}"
+          fi
+          if [ -z "$tag_name" ] || [ "$tag_name" = "$GITHUB_REF" ]; then
+            tag_name="local"
+          fi
+          echo "tag=$tag_name" >> "$GITHUB_OUTPUT"
+          echo "version=$tag_name" >> "$GITHUB_OUTPUT"
+
+      - name: Build binaries (linux/amd64)
+        run: |
+          mkdir -p .dev/bin
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o .dev/bin/manager-linux-amd64 ./cmd/manager
+          curl -fsSL -o .dev/bin/kube-controller-manager-linux-amd64 "https://dl.k8s.io/release/${K8S_VERSION}/bin/linux/amd64/kube-controller-manager"
+          chmod +x .dev/bin/kube-controller-manager-linux-amd64
+
+      - name: Build binaries (linux/arm64)
+        if: contains(env.BUILD_PLATFORMS, 'linux/arm64')
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o .dev/bin/manager-linux-arm64 ./cmd/manager
+          curl -fsSL -o .dev/bin/kube-controller-manager-linux-arm64 "https://dl.k8s.io/release/${K8S_VERSION}/bin/linux/arm64/kube-controller-manager"
+          chmod +x .dev/bin/kube-controller-manager-linux-arm64
+
+      - name: Build and push from prebuilt binaries
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          platforms: ${{ env.BUILD_PLATFORMS }}
+          tags: |
+            ${{ env.DOCKERHUB_REPO || vars.DOCKERHUB_REPO || github.repository }}:${{ steps.meta.outputs.tag }}
+            ${{ env.DOCKERHUB_REPO || vars.DOCKERHUB_REPO || github.repository }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

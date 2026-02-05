@@ -6,4 +6,7 @@ managementNamespacePrefix: kplane-cp-
 virtualAdminNamespace: kplane-system
 virtualAdminServiceAccount: controlplane-admin
 virtualAdminClusterRoleBinding: controlplane-admin
-maxConcurrentReconciles: 16
+maxConcurrentReconciles: 32
+etcdEndpoints:
+  - http://kplane-etcd.kplane-system.svc.cluster.local:2379
+etcdPrefix: /registry

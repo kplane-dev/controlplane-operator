@@ -5,6 +5,7 @@ resources:
 - bases/controlplane.kplane.dev_controlplanes.yaml
 - bases/controlplane.kplane.dev_controlplaneclasses.yaml
 - bases/controlplane.kplane.dev_controlplaneendpoints.yaml
+- bases/controlplane.kplane.dev_controlplaneregistrations.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches: []

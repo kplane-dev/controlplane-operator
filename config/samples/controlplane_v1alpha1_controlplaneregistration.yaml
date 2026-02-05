@@ -1,0 +1,11 @@
+apiVersion: controlplane.kplane.dev/v1alpha1
+kind: ControlPlaneRegistration
+metadata:
+  name: controlplane-registration-sample
+spec:
+  controlPlaneRef:
+    name: controlplane-sample
+  services:
+    - Controllers
+    - Scheduler
+  mode: Shared
