@@ -45,8 +45,8 @@ var (
 	// with the code source changes to be tested.
 	projectImage = "example.com/controlplane-operator:v0.0.1"
 
-	apiserverImage   = "kplane-dev/apiserver:v0.0.2"
-	apiserverRepoDir = "/Users/zach/repos/kplane-dev/apiserver"
+	apiserverImage   = "kplanedev/apiserver:v0.0.2"
+	apiserverRepoDir = ""
 )
 
 // TestE2E runs the end-to-end (e2e) test suite for the project. These tests execute in an isolated,
@@ -60,28 +60,38 @@ func TestE2E(t *testing.T) {
 }
 
 var _ = BeforeSuite(func() {
-	if repoDir := os.Getenv("APISERVER_REPO_DIR"); repoDir != "" {
-		apiserverRepoDir = repoDir
+	apiserverRepoDir = os.Getenv("APISERVER_REPO_DIR")
+	if image := os.Getenv("APISERVER_IMAGE"); image != "" {
+		apiserverImage = image
 	}
 
-	By("building the apiserver binary for Kind")
-	apiserverArch := runtime.GOARCH
-	if v := os.Getenv("APISERVER_ARCH"); v != "" {
-		apiserverArch = v
-	}
-	apiserverBinary := fmt.Sprintf(".dev/bin/apiserver-linux-%s", apiserverArch)
-	cmd := exec.Command("go", "build", "-o", apiserverBinary, "./cmd/apiserver")
-	cmd.Env = append(os.Environ(), "GOOS=linux", fmt.Sprintf("GOARCH=%s", apiserverArch))
-	cmd.Dir = apiserverRepoDir
-	if output, err := cmd.CombinedOutput(); err != nil {
-		ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to build apiserver binary: %s", string(output))
-	}
+	var cmd *exec.Cmd
+	if _, err := os.Stat(apiserverRepoDir); err == nil {
+		By("building the apiserver binary for Kind")
+		apiserverArch := runtime.GOARCH
+		if v := os.Getenv("APISERVER_ARCH"); v != "" {
+			apiserverArch = v
+		}
+		apiserverBinary := fmt.Sprintf(".dev/bin/apiserver-linux-%s", apiserverArch)
+		cmd := exec.Command("go", "build", "-o", apiserverBinary, "./cmd/apiserver")
+		cmd.Env = append(os.Environ(), "GOOS=linux", fmt.Sprintf("GOARCH=%s", apiserverArch))
+		cmd.Dir = apiserverRepoDir
+		if output, err := cmd.CombinedOutput(); err != nil {
+			ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to build apiserver binary: %s", string(output))
+		}
 
-	By("building the apiserver image")
-	cmd = exec.Command("docker", "build", "-t", apiserverImage, ".")
-	cmd.Dir = apiserverRepoDir
-	if output, err := cmd.CombinedOutput(); err != nil {
-		ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to build apiserver image: %s", string(output))
+		By("building the apiserver image")
+		cmd = exec.Command("docker", "build", "-t", apiserverImage, ".")
+		cmd.Dir = apiserverRepoDir
+		if output, err := cmd.CombinedOutput(); err != nil {
+			ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to build apiserver image: %s", string(output))
+		}
+	} else {
+		By("pulling the apiserver image")
+		cmd = exec.Command("docker", "pull", apiserverImage)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to pull apiserver image: %s", string(output))
+		}
 	}
 
 	By("loading the apiserver image on Kind")
