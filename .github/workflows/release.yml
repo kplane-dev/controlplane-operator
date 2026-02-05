@@ -60,14 +60,14 @@ jobs:
       - name: Build binaries (linux/amd64)
         run: |
           mkdir -p .dev/bin
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o .dev/bin/manager-linux-amd64 ./cmd/manager
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o .dev/bin/manager-linux-amd64 ./cmd
           curl -fsSL -o .dev/bin/kube-controller-manager-linux-amd64 "https://dl.k8s.io/release/${K8S_VERSION}/bin/linux/amd64/kube-controller-manager"
           chmod +x .dev/bin/kube-controller-manager-linux-amd64
 
       - name: Build binaries (linux/arm64)
         if: contains(env.BUILD_PLATFORMS, 'linux/arm64')
         run: |
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o .dev/bin/manager-linux-arm64 ./cmd/manager
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o .dev/bin/manager-linux-arm64 ./cmd
           curl -fsSL -o .dev/bin/kube-controller-manager-linux-arm64 "https://dl.k8s.io/release/${K8S_VERSION}/bin/linux/arm64/kube-controller-manager"
           chmod +x .dev/bin/kube-controller-manager-linux-arm64
 
