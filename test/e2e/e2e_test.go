@@ -20,6 +20,7 @@ limitations under the License.
 package e2e
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -144,16 +145,22 @@ var _ = Describe("Manager", Ordered, func() {
 		_, _ = utils.Run(cmd)
 
 		By("undeploying the controller-manager")
-		cmd = exec.Command("make", "undeploy")
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		cmd = exec.CommandContext(ctx, "make", "undeploy")
 		_, _ = utils.Run(cmd)
+		cancel()
 
 		By("uninstalling CRDs")
-		cmd = exec.Command("make", "uninstall")
+		ctx, cancel = context.WithTimeout(context.Background(), 2*time.Minute)
+		cmd = exec.CommandContext(ctx, "make", "uninstall")
 		_, _ = utils.Run(cmd)
+		cancel()
 
 		By("removing manager namespace")
-		cmd = exec.Command("kubectl", "delete", "ns", namespace)
+		ctx, cancel = context.WithTimeout(context.Background(), 2*time.Minute)
+		cmd = exec.CommandContext(ctx, "kubectl", "delete", "ns", namespace)
 		_, _ = utils.Run(cmd)
+		cancel()
 	})
 
 	// After each test, check for failures and collect logs, events,
