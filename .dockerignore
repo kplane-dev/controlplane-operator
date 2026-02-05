@@ -9,3 +9,8 @@
 # Re-include Go module files
 !go.mod
 !go.sum
+
+# Include prebuilt binaries
+!.dev/
+!.dev/bin/
+!.dev/bin/manager-linux-*
