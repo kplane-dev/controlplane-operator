@@ -1,5 +1,6 @@
 # Image URL to use all building/pushing image targets
 IMG ?= controller:latest
+BIN_DIR ?= .dev/bin
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
@@ -113,11 +114,26 @@ build: manifests generate fmt vet ## Build manager binary.
 run: manifests generate fmt vet ## Run a controller from your host.
 	go run ./cmd/main.go
 
+.PHONY: build-manager
+build-manager: ## Build manager binary for the host architecture (linux/GOARCH).
+	@mkdir -p $(BIN_DIR)
+	CGO_ENABLED=0 GOOS=linux GOARCH=$(shell go env GOARCH) \
+		go build -trimpath -ldflags="-s -w" -o $(BIN_DIR)/manager-linux-$(shell go env GOARCH) ./cmd
+
+.PHONY: build-manager-all
+build-manager-all: ## Build manager binaries for all PLATFORMS.
+	@mkdir -p $(BIN_DIR)
+	@for platform in $(subst ',', ,$(PLATFORMS)); do \
+		os=$${platform%%/*}; arch=$${platform##*/}; \
+		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch \
+			go build -trimpath -ldflags="-s -w" -o $(BIN_DIR)/manager-$$os-$$arch ./cmd; \
+	done
+
 # If you wish to build the manager image targeting other platforms you can use the --platform flag.
 # (i.e. docker build --platform linux/arm64). However, you must enable docker buildKit for it.
 # More info: https://docs.docker.com/develop/develop-images/build_enhancements/
 .PHONY: docker-build
-docker-build: ## Build docker image with the manager.
+docker-build: build-manager ## Build docker image with the manager.
 	$(CONTAINER_TOOL) build -t ${IMG} .
 
 .PHONY: docker-push
@@ -130,9 +146,9 @@ docker-push: ## Push docker image with the manager.
 # - have enabled BuildKit. More info: https://docs.docker.com/develop/develop-images/build_enhancements/
 # - be able to push the image to your registry (i.e. if you do not set a valid value via IMG=<myregistry/image:<tag>> then the export will fail)
 # To adequately provide solutions that are compatible with multiple platforms, you should consider using this option.
-PLATFORMS ?= linux/arm64,linux/amd64,linux/s390x,linux/ppc64le
+PLATFORMS ?= linux/amd64,linux/arm64
 .PHONY: docker-buildx
-docker-buildx: ## Build and push docker image for the manager for cross-platform support
+docker-buildx: build-manager-all ## Build and push docker image for the manager for cross-platform support
 	# copy existing Dockerfile and insert --platform=${BUILDPLATFORM} into Dockerfile.cross, and preserve the original Dockerfile
 	sed -e '1 s/\(^FROM\)/FROM --platform=\$$\{BUILDPLATFORM\}/; t' -e ' 1,// s//FROM --platform=\$$\{BUILDPLATFORM\}/' Dockerfile > Dockerfile.cross
 	- $(CONTAINER_TOOL) buildx create --name controlplane-operator-builder
