@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path"
 	"strings"
 	"time"
 
@@ -164,6 +165,14 @@ func (r *ControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	if err != nil && !apierrors.IsNotFound(err) {
 		return ctrl.Result{}, err
 	}
+	if mode == controlplanev1alpha1.ControlPlaneModeVirtual {
+		if endpoint, err = ensureVirtualClusterEndpoint(endpoint, clusterPath); err != nil {
+			return ctrl.Result{}, err
+		}
+		if externalEndpoint, err = ensureVirtualClusterEndpoint(externalEndpoint, clusterPath); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
 	if externalEndpoint == "" {
 		externalEndpoint = endpoint
 	}
@@ -171,6 +180,11 @@ func (r *ControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	joinEndpoint, err := r.resolveJoinEndpoint(ctx, &controlPlane)
 	if err != nil && !apierrors.IsNotFound(err) {
 		return ctrl.Result{}, err
+	}
+	if mode == controlplanev1alpha1.ControlPlaneModeVirtual {
+		if joinEndpoint, err = ensureVirtualClusterEndpoint(joinEndpoint, clusterPath); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 	if joinEndpoint == "" {
 		joinEndpoint = externalEndpoint
@@ -618,8 +632,13 @@ func isAPIServerNotReady(err error) bool {
 	if err == nil {
 		return false
 	}
+	msg := err.Error()
+	if strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "dial tcp") ||
+		strings.Contains(msg, "no such host") {
+		return true
+	}
 	if apierrors.IsForbidden(err) || apierrors.IsServiceUnavailable(err) || apierrors.IsTooManyRequests(err) {
-		msg := err.Error()
 		if strings.Contains(msg, "not yet ready to handle request") ||
 			strings.Contains(msg, "apiserver not ready") ||
 			strings.Contains(msg, "not yet ready") {
@@ -875,12 +894,39 @@ users: []
 }
 
 func ensureBootstrapToken(ctx context.Context, clientset *kubernetes.Clientset) error {
+	secrets, err := clientset.CoreV1().Secrets("kube-system").List(ctx, metav1.ListOptions{
+		LabelSelector: "controlplane.kplane.dev/managed=true",
+	})
+	if err != nil {
+		return err
+	}
+	if len(secrets.Items) > 0 {
+		return nil
+	}
+	secrets, err = clientset.CoreV1().Secrets("kube-system").List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return err
+	}
+	for _, secret := range secrets.Items {
+		if secret.Type != "bootstrap.kubernetes.io/token" {
+			continue
+		}
+		if _, ok := secret.Data["token-id"]; ok {
+			return nil
+		}
+		if _, ok := secret.Data["token-secret"]; ok {
+			return nil
+		}
+	}
 	tokenID := utilrand.String(6)
 	tokenSecret := utilrand.String(16)
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "bootstrap-token-" + tokenID,
 			Namespace: "kube-system",
+			Labels: map[string]string{
+				"controlplane.kplane.dev/managed": "true",
+			},
 		},
 		Type: "bootstrap.kubernetes.io/token",
 		StringData: map[string]string{
@@ -891,7 +937,7 @@ func ensureBootstrapToken(ctx context.Context, clientset *kubernetes.Clientset) 
 			"auth-extra-groups":              "system:bootstrappers,system:bootstrappers:kubeadm:default-node-token",
 		},
 	}
-	_, err := clientset.CoreV1().Secrets("kube-system").Create(ctx, secret, metav1.CreateOptions{})
+	_, err = clientset.CoreV1().Secrets("kube-system").Create(ctx, secret, metav1.CreateOptions{})
 	if err != nil && !apierrors.IsAlreadyExists(err) {
 		return err
 	}
@@ -1134,6 +1180,25 @@ func clusterPathForControlPlane(controlPlane *controlplanev1alpha1.ControlPlane)
 		return clusterPath, fmt.Errorf("invalid cluster path %q: %s", clusterPath, msg)
 	}
 	return clusterPath, nil
+}
+
+func ensureVirtualClusterEndpoint(raw, clusterPath string) (string, error) {
+	if raw == "" {
+		return "", nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", err
+	}
+	if strings.Contains(u.Path, "/clusters/") && strings.Contains(u.Path, "/control-plane") {
+		return raw, nil
+	}
+	desiredPath := path.Join(u.Path, "clusters", clusterPath, "control-plane")
+	if !strings.HasPrefix(desiredPath, "/") {
+		desiredPath = "/" + desiredPath
+	}
+	u.Path = desiredPath
+	return u.String(), nil
 }
 
 func deletionPolicyFor(controlPlane *controlplanev1alpha1.ControlPlane, class *controlplanev1alpha1.ControlPlaneClass) controlplanev1alpha1.DeletionPolicy {
