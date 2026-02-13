@@ -45,7 +45,7 @@ var (
 	// with the code source changes to be tested.
 	projectImage = "example.com/controlplane-operator:v0.0.1"
 
-	apiserverImage   = "kplanedev/apiserver:v0.0.2"
+	apiserverImage   = "kplanedev/apiserver:v0.0.3"
 	apiserverRepoDir = ""
 )
 
@@ -64,14 +64,14 @@ var _ = BeforeSuite(func() {
 	if image := os.Getenv("APISERVER_IMAGE"); image != "" {
 		apiserverImage = image
 	}
+	apiserverArch := runtime.GOARCH
+	if v := os.Getenv("APISERVER_ARCH"); v != "" {
+		apiserverArch = v
+	}
 
 	var cmd *exec.Cmd
 	if _, err := os.Stat(apiserverRepoDir); err == nil {
 		By("building the apiserver binary for Kind")
-		apiserverArch := runtime.GOARCH
-		if v := os.Getenv("APISERVER_ARCH"); v != "" {
-			apiserverArch = v
-		}
 		apiserverBinary := fmt.Sprintf(".dev/bin/apiserver-linux-%s", apiserverArch)
 		cmd := exec.Command("go", "build", "-o", apiserverBinary, "./cmd/apiserver")
 		cmd.Env = append(os.Environ(), "GOOS=linux", fmt.Sprintf("GOARCH=%s", apiserverArch))
@@ -86,9 +86,11 @@ var _ = BeforeSuite(func() {
 		if output, err := cmd.CombinedOutput(); err != nil {
 			ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to build apiserver image: %s", string(output))
 		}
+	} else if isLocalImagePresent(apiserverImage) {
+		By("using the local apiserver image")
 	} else {
 		By("pulling the apiserver image")
-		cmd = exec.Command("docker", "pull", apiserverImage)
+		cmd = exec.Command("docker", "pull", "--platform", fmt.Sprintf("linux/%s", apiserverArch), apiserverImage)
 		if output, err := cmd.CombinedOutput(); err != nil {
 			ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to pull apiserver image: %s", string(output))
 		}
@@ -124,6 +126,11 @@ var _ = BeforeSuite(func() {
 		}
 	}
 })
+
+func isLocalImagePresent(image string) bool {
+	cmd := exec.Command("docker", "image", "inspect", image)
+	return cmd.Run() == nil
+}
 
 var _ = AfterSuite(func() {
 	// Teardown CertManager after the suite if not skipped and if it was not already installed

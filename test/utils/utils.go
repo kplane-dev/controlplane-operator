@@ -139,13 +139,36 @@ func LoadImageToKindClusterWithName(name string) error {
 	if v, ok := os.LookupEnv("KIND_CLUSTER"); ok {
 		cluster = v
 	}
-	kindOptions := []string{"load", "docker-image", name, "--name", cluster}
 	kindBinary := defaultKindBinary
 	if v, ok := os.LookupEnv("KIND"); ok {
 		kindBinary = v
 	}
-	cmd := exec.Command(kindBinary, kindOptions...)
-	_, err := Run(cmd)
+
+	tmpFile, err := os.CreateTemp("", "kplane-kind-image-*.tar")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmpFile.Name()
+	if closeErr := tmpFile.Close(); closeErr != nil {
+		warnError(closeErr)
+	}
+	defer func() {
+		if err := os.Remove(tmpPath); err != nil {
+			warnError(err)
+		}
+	}()
+
+	cmd := exec.Command("docker", "save", "-o", tmpPath, name)
+	if _, err = Run(cmd); err == nil {
+		cmd = exec.Command(kindBinary, "load", "image-archive", "--name", cluster, tmpPath)
+		if _, err = Run(cmd); err == nil {
+			return nil
+		}
+	}
+
+	kindOptions := []string{"load", "docker-image", name, "--name", cluster}
+	cmd = exec.Command(kindBinary, kindOptions...)
+	_, err = Run(cmd)
 	return err
 }
 
