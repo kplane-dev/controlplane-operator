@@ -46,7 +46,7 @@ make uninstall
 The e2e suite uses a Kind cluster and a shared apiserver image.
 
 ```sh
-APISERVER_IMAGE=kplanedev/apiserver:v0.0.2 make test-e2e
+APISERVER_IMAGE=kplanedev/apiserver:v0.0.3 make test-e2e
 ```
 
 Optional overrides:

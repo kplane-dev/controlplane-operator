@@ -504,22 +504,8 @@ func (r *ControlPlaneReconciler) clusterClientForEndpoint(endpoint string) (*kub
 
 func (r *ControlPlaneReconciler) bootstrapVirtualCluster(ctx context.Context, clientset *kubernetes.Clientset, endpoint string, caData []byte) error {
 	adminNS := r.virtualAdminNamespace()
-	requiredNamespaces := []string{
-		"default",
-		"kube-system",
-		"kube-public",
-		"kube-node-lease",
-		adminNS,
-	}
-	seen := make(map[string]struct{}, len(requiredNamespaces))
-	for _, ns := range requiredNamespaces {
-		if _, ok := seen[ns]; ok {
-			continue
-		}
-		seen[ns] = struct{}{}
-		if err := ensureNamespace(ctx, clientset, ns); err != nil {
-			return err
-		}
+	if err := ensureNamespace(ctx, clientset, adminNS); err != nil {
+		return err
 	}
 
 	if _, err := clientset.CoreV1().ServiceAccounts(adminNS).Create(ctx, &corev1.ServiceAccount{
@@ -945,51 +931,7 @@ func ensureBootstrapToken(ctx context.Context, clientset *kubernetes.Clientset) 
 }
 
 func ensureBootstrapRBAC(ctx context.Context, clientset *kubernetes.Clientset) error {
-	if err := ensurePublicInfoViewer(ctx, clientset); err != nil {
-		return err
-	}
 	if err := ensureKubeadmBootstrapperRole(ctx, clientset); err != nil {
-		return err
-	}
-	if err := ensureNodeRBAC(ctx, clientset); err != nil {
-		return err
-	}
-
-	clusterRole := &rbacv1.ClusterRole{
-		ObjectMeta: metav1.ObjectMeta{Name: "system:node-bootstrapper"},
-		Rules: []rbacv1.PolicyRule{
-			{
-				APIGroups: []string{"certificates.k8s.io"},
-				Resources: []string{"certificatesigningrequests", "certificatesigningrequests/nodeclient"},
-				Verbs:     []string{"create", "get", "list", "watch"},
-			},
-		},
-	}
-	_, err := clientset.RbacV1().ClusterRoles().Create(ctx, clusterRole, metav1.CreateOptions{})
-	if err != nil && !apierrors.IsAlreadyExists(err) {
-		return err
-	}
-
-	clusterRoleBinding := &rbacv1.ClusterRoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: "system:node-bootstrapper"},
-		RoleRef: rbacv1.RoleRef{
-			APIGroup: "rbac.authorization.k8s.io",
-			Kind:     "ClusterRole",
-			Name:     "system:node-bootstrapper",
-		},
-		Subjects: []rbacv1.Subject{
-			{
-				Kind: "Group",
-				Name: "system:bootstrappers",
-			},
-			{
-				Kind: "Group",
-				Name: "system:bootstrappers:kubeadm:default-node-token",
-			},
-		},
-	}
-	_, err = clientset.RbacV1().ClusterRoleBindings().Create(ctx, clusterRoleBinding, metav1.CreateOptions{})
-	if err != nil && !apierrors.IsAlreadyExists(err) {
 		return err
 	}
 
@@ -1014,25 +956,7 @@ func ensureBootstrapRBAC(ctx context.Context, clientset *kubernetes.Clientset) e
 			},
 		},
 	}
-	_, err = clientset.RbacV1().RoleBindings("kube-public").Create(ctx, roleBinding, metav1.CreateOptions{})
-	if err != nil && !apierrors.IsAlreadyExists(err) {
-		return err
-	}
-	return nil
-}
-
-func ensurePublicInfoViewer(ctx context.Context, clientset *kubernetes.Clientset) error {
-	clusterRole := &rbacv1.ClusterRole{
-		ObjectMeta: metav1.ObjectMeta{Name: "system:public-info-viewer"},
-		Rules: []rbacv1.PolicyRule{
-			{
-				APIGroups: []string{""},
-				Resources: []string{"configmaps"},
-				Verbs:     []string{"get", "list", "watch"},
-			},
-		},
-	}
-	_, err := clientset.RbacV1().ClusterRoles().Create(ctx, clusterRole, metav1.CreateOptions{})
+	_, err := clientset.RbacV1().RoleBindings("kube-public").Create(ctx, roleBinding, metav1.CreateOptions{})
 	if err != nil && !apierrors.IsAlreadyExists(err) {
 		return err
 	}
@@ -1080,83 +1004,6 @@ func ensureKubeadmBootstrapperRole(ctx context.Context, clientset *kubernetes.Cl
 		},
 	}
 	_, err = clientset.RbacV1().RoleBindings("kube-system").Create(ctx, roleBinding, metav1.CreateOptions{})
-	if err != nil && !apierrors.IsAlreadyExists(err) {
-		return err
-	}
-	return nil
-}
-
-func ensureNodeRBAC(ctx context.Context, clientset *kubernetes.Clientset) error {
-	clusterRole := &rbacv1.ClusterRole{
-		ObjectMeta: metav1.ObjectMeta{Name: "system:node"},
-		Rules: []rbacv1.PolicyRule{
-			{
-				APIGroups: []string{""},
-				Resources: []string{"nodes"},
-				Verbs:     []string{"create", "get", "list", "watch", "update", "patch"},
-			},
-			{
-				APIGroups: []string{""},
-				Resources: []string{"nodes/status"},
-				Verbs:     []string{"update", "patch"},
-			},
-			{
-				APIGroups: []string{""},
-				Resources: []string{"pods"},
-				Verbs:     []string{"get", "list", "watch"},
-			},
-			{
-				APIGroups: []string{""},
-				Resources: []string{"pods/status"},
-				Verbs:     []string{"update", "patch"},
-			},
-			{
-				APIGroups: []string{""},
-				Resources: []string{"services", "endpoints", "configmaps", "secrets"},
-				Verbs:     []string{"get", "list", "watch"},
-			},
-			{
-				APIGroups: []string{"coordination.k8s.io"},
-				Resources: []string{"leases"},
-				Verbs:     []string{"get", "list", "watch", "create", "update", "patch"},
-			},
-			{
-				APIGroups: []string{"storage.k8s.io"},
-				Resources: []string{"csidrivers"},
-				Verbs:     []string{"get", "list", "watch"},
-			},
-			{
-				APIGroups: []string{"node.k8s.io"},
-				Resources: []string{"runtimeclasses"},
-				Verbs:     []string{"get", "list", "watch"},
-			},
-			{
-				APIGroups: []string{""},
-				Resources: []string{"events"},
-				Verbs:     []string{"create", "patch", "update"},
-			},
-		},
-	}
-	_, err := clientset.RbacV1().ClusterRoles().Create(ctx, clusterRole, metav1.CreateOptions{})
-	if err != nil && !apierrors.IsAlreadyExists(err) {
-		return err
-	}
-
-	clusterRoleBinding := &rbacv1.ClusterRoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: "system:nodes"},
-		RoleRef: rbacv1.RoleRef{
-			APIGroup: "rbac.authorization.k8s.io",
-			Kind:     "ClusterRole",
-			Name:     "system:node",
-		},
-		Subjects: []rbacv1.Subject{
-			{
-				Kind: "Group",
-				Name: "system:nodes",
-			},
-		},
-	}
-	_, err = clientset.RbacV1().ClusterRoleBindings().Create(ctx, clusterRoleBinding, metav1.CreateOptions{})
 	if err != nil && !apierrors.IsAlreadyExists(err) {
 		return err
 	}
