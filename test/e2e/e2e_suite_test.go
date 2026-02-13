@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -94,6 +95,14 @@ var _ = BeforeSuite(func() {
 		if output, err := cmd.CombinedOutput(); err != nil {
 			ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to pull apiserver image: %s", string(output))
 		}
+		platformTag := fmt.Sprintf("%s-%s", apiserverImage, apiserverArch)
+		imageID, err := dockerImageID(apiserverImage)
+		ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to read apiserver image ID")
+		cmd = exec.Command("docker", "tag", imageID, platformTag)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to tag apiserver image: %s", string(output))
+		}
+		apiserverImage = platformTag
 	}
 
 	By("loading the apiserver image on Kind")
@@ -130,6 +139,15 @@ var _ = BeforeSuite(func() {
 func isLocalImagePresent(image string) bool {
 	cmd := exec.Command("docker", "image", "inspect", image)
 	return cmd.Run() == nil
+}
+
+func dockerImageID(image string) (string, error) {
+	cmd := exec.Command("docker", "image", "inspect", "--format", "{{.Id}}", image)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(output)), nil
 }
 
 var _ = AfterSuite(func() {
