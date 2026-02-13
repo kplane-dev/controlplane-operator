@@ -149,8 +149,8 @@ func LoadImageToKindClusterWithName(name string) error {
 		return err
 	}
 	tmpPath := tmpFile.Name()
-	if closeErr := tmpFile.Close(); closeErr != nil && err == nil {
-		err = closeErr
+	if closeErr := tmpFile.Close(); closeErr != nil {
+		warnError(closeErr)
 	}
 	defer func() {
 		if err := os.Remove(tmpPath); err != nil {
@@ -158,18 +158,16 @@ func LoadImageToKindClusterWithName(name string) error {
 		}
 	}()
 
-	if err == nil {
-		cmd := exec.Command("docker", "save", "-o", tmpPath, name)
+	cmd := exec.Command("docker", "save", "-o", tmpPath, name)
+	if _, err = Run(cmd); err == nil {
+		cmd = exec.Command(kindBinary, "load", "image-archive", "--name", cluster, tmpPath)
 		if _, err = Run(cmd); err == nil {
-			cmd = exec.Command(kindBinary, "load", "image-archive", "--name", cluster, tmpPath)
-			if _, err = Run(cmd); err == nil {
-				return nil
-			}
+			return nil
 		}
 	}
 
 	kindOptions := []string{"load", "docker-image", name, "--name", cluster}
-	cmd := exec.Command(kindBinary, kindOptions...)
+	cmd = exec.Command(kindBinary, kindOptions...)
 	_, err = Run(cmd)
 	return err
 }
