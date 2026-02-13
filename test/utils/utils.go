@@ -152,7 +152,11 @@ func LoadImageToKindClusterWithName(name string) error {
 	if closeErr := tmpFile.Close(); closeErr != nil && err == nil {
 		err = closeErr
 	}
-	defer os.Remove(tmpPath)
+	defer func() {
+		if err := os.Remove(tmpPath); err != nil {
+			warnError(err)
+		}
+	}()
 
 	if err == nil {
 		cmd := exec.Command("docker", "save", "-o", tmpPath, name)
