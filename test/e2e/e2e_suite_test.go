@@ -64,14 +64,14 @@ var _ = BeforeSuite(func() {
 	if image := os.Getenv("APISERVER_IMAGE"); image != "" {
 		apiserverImage = image
 	}
+	apiserverArch := runtime.GOARCH
+	if v := os.Getenv("APISERVER_ARCH"); v != "" {
+		apiserverArch = v
+	}
 
 	var cmd *exec.Cmd
 	if _, err := os.Stat(apiserverRepoDir); err == nil {
 		By("building the apiserver binary for Kind")
-		apiserverArch := runtime.GOARCH
-		if v := os.Getenv("APISERVER_ARCH"); v != "" {
-			apiserverArch = v
-		}
 		apiserverBinary := fmt.Sprintf(".dev/bin/apiserver-linux-%s", apiserverArch)
 		cmd := exec.Command("go", "build", "-o", apiserverBinary, "./cmd/apiserver")
 		cmd.Env = append(os.Environ(), "GOOS=linux", fmt.Sprintf("GOARCH=%s", apiserverArch))
@@ -90,7 +90,7 @@ var _ = BeforeSuite(func() {
 		By("using the local apiserver image")
 	} else {
 		By("pulling the apiserver image")
-		cmd = exec.Command("docker", "pull", apiserverImage)
+		cmd = exec.Command("docker", "pull", "--platform", fmt.Sprintf("linux/%s", apiserverArch), apiserverImage)
 		if output, err := cmd.CombinedOutput(); err != nil {
 			ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to pull apiserver image: %s", string(output))
 		}
