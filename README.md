@@ -13,6 +13,7 @@ kubeconfig secrets that downstream services can consume through
 
 For the design details, see:
 - `docs/controlplane-operator-design.md`
+- `docs/kplane-sharding-autoscaling-design.md`
 - `docs/kplane-cli-design.md`
 
 ## Quickstart (local dev)

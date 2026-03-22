@@ -63,6 +63,56 @@ spec:
                 - Retain
                 - Destroy
                 type: string
+              gateway:
+                description: |-
+                  gateway configures automatic Gateway API routing for control planes
+                  using this class. When set, the operator auto-creates an HTTPRoute and
+                  ControlPlaneEndpoint for each ControlPlane that does not specify an
+                  explicit endpointRef. When unset, behavior is unchanged — the user
+                  or CLI must provide the ControlPlaneEndpoint.
+                properties:
+                  apiServerRef:
+                    description: apiServerRef identifies the backend Service for routing.
+                    properties:
+                      name:
+                        description: name of the Service.
+                        type: string
+                      namespace:
+                        description: namespace of the Service.
+                        type: string
+                      port:
+                        description: port on the Service.
+                        format: int32
+                        type: integer
+                    required:
+                    - name
+                    - namespace
+                    - port
+                    type: object
+                  hostnameTemplate:
+                    description: |-
+                      hostnameTemplate is a Go template for generating per-ControlPlane hostnames.
+                      Available variables: {{.Name}} (ControlPlane name).
+                      Example: "{{.Name}}.clusters.staging.env.kplane.dev"
+                    type: string
+                  parentRef:
+                    description: parentRef identifies the Gateway to attach HTTPRoutes
+                      to.
+                    properties:
+                      name:
+                        description: name of the Gateway.
+                        type: string
+                      namespace:
+                        description: namespace of the Gateway.
+                        type: string
+                    required:
+                    - name
+                    - namespace
+                    type: object
+                required:
+                - hostnameTemplate
+                - parentRef
+                type: object
               modesAllowed:
                 description: modesAllowed restricts which control plane modes can
                   use this class.

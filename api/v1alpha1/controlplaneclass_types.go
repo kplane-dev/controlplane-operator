@@ -40,6 +40,50 @@ type ControlPlaneClassSpec struct {
 	// modesAllowed restricts which control plane modes can use this class.
 	// +optional
 	ModesAllowed []ControlPlaneMode `json:"modesAllowed,omitempty"`
+
+	// gateway configures automatic Gateway API routing for control planes
+	// using this class. When set, the operator auto-creates an HTTPRoute and
+	// ControlPlaneEndpoint for each ControlPlane that does not specify an
+	// explicit endpointRef. When unset, behavior is unchanged — the user
+	// or CLI must provide the ControlPlaneEndpoint.
+	// +optional
+	Gateway *ControlPlaneClassGatewaySpec `json:"gateway,omitempty"`
+}
+
+// ControlPlaneClassGatewaySpec configures automatic Gateway API routing.
+type ControlPlaneClassGatewaySpec struct {
+	// parentRef identifies the Gateway to attach HTTPRoutes to.
+	ParentRef GatewayParentRef `json:"parentRef"`
+
+	// hostnameTemplate is a Go template for generating per-ControlPlane hostnames.
+	// Available variables: {{.Name}} (ControlPlane name).
+	// Example: "{{.Name}}.clusters.staging.env.kplane.dev"
+	HostnameTemplate string `json:"hostnameTemplate"`
+
+	// apiServerRef identifies the backend Service for routing.
+	// +optional
+	APIServerRef *GatewayBackendRef `json:"apiServerRef,omitempty"`
+}
+
+// GatewayParentRef identifies a Gateway resource.
+type GatewayParentRef struct {
+	// name of the Gateway.
+	Name string `json:"name"`
+
+	// namespace of the Gateway.
+	Namespace string `json:"namespace"`
+}
+
+// GatewayBackendRef identifies a backend Service for HTTPRoute rules.
+type GatewayBackendRef struct {
+	// name of the Service.
+	Name string `json:"name"`
+
+	// namespace of the Service.
+	Namespace string `json:"namespace"`
+
+	// port on the Service.
+	Port int32 `json:"port"`
 }
 
 // ControlPlaneClassAuthSpec provides basic auth defaults (v0/v1).

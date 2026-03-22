@@ -23,9 +23,11 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/url"
+
 	"os"
 	"path"
 	"strings"
+	"text/template"
 	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -51,6 +53,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
+
 	controlplanev1alpha1 "github.com/kplane-dev/controlplane-operator/api/v1alpha1"
 	"github.com/kplane-dev/controlplane-operator/internal/config"
 )
@@ -67,8 +71,9 @@ type ControlPlaneReconciler struct {
 // +kubebuilder:rbac:groups=controlplane.kplane.dev,resources=controlplanes/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=controlplane.kplane.dev,resources=controlplanes/finalizers,verbs=update
 // +kubebuilder:rbac:groups=controlplane.kplane.dev,resources=controlplaneclasses,verbs=get;list;watch
-// +kubebuilder:rbac:groups=controlplane.kplane.dev,resources=controlplaneendpoints,verbs=get;list;watch
+// +kubebuilder:rbac:groups=controlplane.kplane.dev,resources=controlplaneendpoints,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=namespaces;secrets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -127,9 +132,10 @@ func (r *ControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, err
 	}
 
+	var classObj *controlplanev1alpha1.ControlPlaneClass
 	if controlPlane.Spec.ClassRef != nil && controlPlane.Spec.ClassRef.Name != "" {
-		var classObj controlplanev1alpha1.ControlPlaneClass
-		if err := r.Get(ctx, client.ObjectKey{Name: controlPlane.Spec.ClassRef.Name}, &classObj); err != nil {
+		var cls controlplanev1alpha1.ControlPlaneClass
+		if err := r.Get(ctx, client.ObjectKey{Name: controlPlane.Spec.ClassRef.Name}, &cls); err != nil {
 			if apierrors.IsNotFound(err) {
 				return r.updateStatus(ctx, &controlPlane, "", nil, conditionReady(
 					metav1.ConditionFalse,
@@ -139,6 +145,7 @@ func (r *ControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			}
 			return ctrl.Result{}, err
 		}
+		classObj = &cls
 	}
 
 	if mode != controlplanev1alpha1.ControlPlaneModeVirtual {
@@ -147,6 +154,19 @@ func (r *ControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			"ModeNotSupported",
 			fmt.Sprintf("mode %q is not supported in v0/v1", mode),
 		))
+	}
+
+	// If no endpointRef and the class has gateway config, auto-create the
+	// ControlPlaneEndpoint and HTTPRoute.
+	if (controlPlane.Spec.EndpointRef == nil || controlPlane.Spec.EndpointRef.Name == "") &&
+		classObj != nil && classObj.Spec.Gateway != nil {
+		if err := r.ensureGatewayResources(ctx, &controlPlane, classObj, clusterPath); err != nil {
+			return ctrl.Result{}, err
+		}
+		// Re-read the ControlPlane since we may have set endpointRef.
+		if err := r.Get(ctx, req.NamespacedName, &controlPlane); err != nil {
+			return ctrl.Result{}, client.IgnoreNotFound(err)
+		}
 	}
 
 	endpoint, err := r.resolveEndpoint(ctx, &controlPlane)
@@ -1107,4 +1127,161 @@ func (r *ControlPlaneReconciler) destroyClusterData(ctx context.Context, cluster
 
 	logf.FromContext(ctx).Info("destroyed cluster data", "clusterID", clusterID, "deletedKeys", deleted)
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Gateway API integration
+// ---------------------------------------------------------------------------
+
+// ensureGatewayResources auto-creates a ControlPlaneEndpoint and HTTPRoute for
+// a ControlPlane whose class has gateway configuration. It then patches the
+// ControlPlane to set endpointRef so the normal reconciliation flow proceeds.
+func (r *ControlPlaneReconciler) ensureGatewayResources(
+	ctx context.Context,
+	controlPlane *controlplanev1alpha1.ControlPlane,
+	class *controlplanev1alpha1.ControlPlaneClass,
+	clusterPath string,
+) error {
+	log := logf.FromContext(ctx)
+	gw := class.Spec.Gateway
+
+	hostname, err := renderHostname(gw.HostnameTemplate, controlPlane)
+	if err != nil {
+		return fmt.Errorf("failed to render hostname template: %w", err)
+	}
+
+	cpSegment := r.Config.ControlPlaneSegment
+	if cpSegment == "" {
+		cpSegment = config.DefaultControlPlaneSegment
+	}
+	pathPrefix := r.Config.ClusterPathPrefix
+	if pathPrefix == "" {
+		pathPrefix = config.DefaultClusterPathPrefix
+	}
+	fullPath := path.Join(pathPrefix, clusterPath, cpSegment)
+
+	// Determine apiserver backend.
+	backendName := "kplane-apiserver"
+	backendNamespace := "kplane-apiserver"
+	backendPort := int32(443)
+	if gw.APIServerRef != nil {
+		backendName = gw.APIServerRef.Name
+		backendNamespace = gw.APIServerRef.Namespace
+		backendPort = gw.APIServerRef.Port
+	}
+
+	internalEndpoint := fmt.Sprintf("https://%s.%s.svc.cluster.local:%d%s",
+		backendName, backendNamespace, backendPort, fullPath)
+	externalEndpoint := fmt.Sprintf("https://%s%s", hostname, fullPath)
+
+	endpointName := controlPlane.Name + "-endpoint"
+
+	// Ensure ControlPlaneEndpoint.
+	var endpoint controlplanev1alpha1.ControlPlaneEndpoint
+	if err := r.Get(ctx, client.ObjectKey{Name: endpointName}, &endpoint); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return err
+		}
+		endpoint = controlplanev1alpha1.ControlPlaneEndpoint{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: endpointName,
+				OwnerReferences: []metav1.OwnerReference{{
+					APIVersion: controlplanev1alpha1.GroupVersion.String(),
+					Kind:       "ControlPlane",
+					Name:       controlPlane.Name,
+					UID:        controlPlane.UID,
+					Controller: ptr.To(true),
+				}},
+			},
+			Spec: controlplanev1alpha1.ControlPlaneEndpointSpec{
+				Endpoint:         internalEndpoint,
+				ExternalEndpoint: externalEndpoint,
+			},
+		}
+		if err := r.Create(ctx, &endpoint); err != nil {
+			return fmt.Errorf("failed to create ControlPlaneEndpoint: %w", err)
+		}
+		log.Info("created ControlPlaneEndpoint", "name", endpointName)
+	}
+
+	// Ensure HTTPRoute.
+	routeName := controlPlane.Name + "-route"
+	gwNamespace := gatewayv1.Namespace(gw.ParentRef.Namespace)
+	backendNS := gatewayv1.Namespace(backendNamespace)
+	pathType := gatewayv1.PathMatchPathPrefix
+	gwHostname := gatewayv1.Hostname(hostname)
+	portNum := gatewayv1.PortNumber(backendPort)
+
+	var route gatewayv1.HTTPRoute
+	if err := r.Get(ctx, client.ObjectKey{Name: routeName, Namespace: backendNamespace}, &route); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return err
+		}
+		route = gatewayv1.HTTPRoute{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      routeName,
+				Namespace: backendNamespace,
+				OwnerReferences: []metav1.OwnerReference{{
+					APIVersion: controlplanev1alpha1.GroupVersion.String(),
+					Kind:       "ControlPlane",
+					Name:       controlPlane.Name,
+					UID:        controlPlane.UID,
+					Controller: ptr.To(true),
+				}},
+			},
+			Spec: gatewayv1.HTTPRouteSpec{
+				CommonRouteSpec: gatewayv1.CommonRouteSpec{
+					ParentRefs: []gatewayv1.ParentReference{{
+						Name:      gatewayv1.ObjectName(gw.ParentRef.Name),
+						Namespace: &gwNamespace,
+					}},
+				},
+				Hostnames: []gatewayv1.Hostname{gwHostname},
+				Rules: []gatewayv1.HTTPRouteRule{{
+					Matches: []gatewayv1.HTTPRouteMatch{{
+						Path: &gatewayv1.HTTPPathMatch{
+							Type:  &pathType,
+							Value: ptr.To(fullPath),
+						},
+					}},
+					BackendRefs: []gatewayv1.HTTPBackendRef{{
+						BackendRef: gatewayv1.BackendRef{
+							BackendObjectReference: gatewayv1.BackendObjectReference{
+								Name:      gatewayv1.ObjectName(backendName),
+								Namespace: &backendNS,
+								Port:      &portNum,
+							},
+						},
+					}},
+				}},
+			},
+		}
+		if err := r.Create(ctx, &route); err != nil {
+			return fmt.Errorf("failed to create HTTPRoute: %w", err)
+		}
+		log.Info("created HTTPRoute", "name", routeName, "hostname", hostname)
+	}
+
+	// Patch the ControlPlane to set endpointRef.
+	controlPlane.Spec.EndpointRef = &controlplanev1alpha1.ControlPlaneEndpointReference{
+		Name: endpointName,
+	}
+	if err := r.Update(ctx, controlPlane); err != nil {
+		return fmt.Errorf("failed to set endpointRef on ControlPlane: %w", err)
+	}
+	log.Info("set endpointRef on ControlPlane", "endpointRef", endpointName)
+	return nil
+}
+
+// renderHostname executes a Go template to produce a hostname for a ControlPlane.
+func renderHostname(tmpl string, cp *controlplanev1alpha1.ControlPlane) (string, error) {
+	t, err := template.New("hostname").Parse(tmpl)
+	if err != nil {
+		return "", err
+	}
+	var buf strings.Builder
+	if err := t.Execute(&buf, map[string]string{"Name": cp.Name}); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
 }
