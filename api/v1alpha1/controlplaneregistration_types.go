@@ -89,7 +89,7 @@ type ControlPlaneRegistrationStatus struct {
 }
 
 // +kubebuilder:object:root=true
-// +kubebuilder:resource:scope=Cluster
+// +kubebuilder:resource:scope=Namespaced
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Endpoint",type=string,JSONPath=`.status.resolvedEndpoint`,priority=1
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.ready`

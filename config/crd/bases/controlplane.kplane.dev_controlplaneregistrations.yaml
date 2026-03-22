@@ -12,7 +12,7 @@ spec:
     listKind: ControlPlaneRegistrationList
     plural: controlplaneregistrations
     singular: controlplaneregistration
-  scope: Cluster
+  scope: Namespaced
   versions:
   - additionalPrinterColumns:
     - jsonPath: .status.resolvedEndpoint

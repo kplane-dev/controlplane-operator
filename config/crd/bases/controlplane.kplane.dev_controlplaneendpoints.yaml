@@ -12,7 +12,7 @@ spec:
     listKind: ControlPlaneEndpointList
     plural: controlplaneendpoints
     singular: controlplaneendpoint
-  scope: Cluster
+  scope: Namespaced
   versions:
   - additionalPrinterColumns:
     - jsonPath: .status.endpoint
