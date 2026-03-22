@@ -365,11 +365,16 @@ func (r *ControlPlaneReconciler) managementNamespace(controlPlane *controlplanev
 	if prefix == "" {
 		prefix = defaultNSPrefix
 	}
-	name := prefix + controlPlane.Name
+	// Include the CP namespace to avoid collisions across namespaces.
+	cpID := controlPlane.Name
+	if controlPlane.Namespace != "" && controlPlane.Namespace != "default" {
+		cpID = controlPlane.Namespace + "-" + controlPlane.Name
+	}
+	name := prefix + cpID
 	if len(name) <= 63 {
 		return name
 	}
-	hash := sha256.Sum256([]byte(controlPlane.Name))
+	hash := sha256.Sum256([]byte(cpID))
 	suffix := hex.EncodeToString(hash[:4])
 	trunc := controlPlane.Name
 	if len(trunc) > 40 {
@@ -443,7 +448,7 @@ func (r *ControlPlaneReconciler) resolveEndpoint(ctx context.Context, controlPla
 	}
 
 	var endpoint controlplanev1alpha1.ControlPlaneEndpoint
-	if err := r.Get(ctx, client.ObjectKey{Name: ref.Name}, &endpoint); err != nil {
+	if err := r.Get(ctx, client.ObjectKey{Name: ref.Name, Namespace: controlPlane.Namespace}, &endpoint); err != nil {
 		return "", err
 	}
 	if endpoint.Status.Endpoint != "" {
@@ -468,7 +473,7 @@ func (r *ControlPlaneReconciler) resolveExternalEndpoint(ctx context.Context, co
 	}
 
 	var endpoint controlplanev1alpha1.ControlPlaneEndpoint
-	if err := r.Get(ctx, client.ObjectKey{Name: ref.Name}, &endpoint); err != nil {
+	if err := r.Get(ctx, client.ObjectKey{Name: ref.Name, Namespace: controlPlane.Namespace}, &endpoint); err != nil {
 		return "", err
 	}
 	if endpoint.Status.ExternalEndpoint != "" {
@@ -499,7 +504,7 @@ func (r *ControlPlaneReconciler) resolveJoinEndpoint(ctx context.Context, contro
 	}
 
 	var endpoint controlplanev1alpha1.ControlPlaneEndpoint
-	if err := r.Get(ctx, client.ObjectKey{Name: ref.Name}, &endpoint); err != nil {
+	if err := r.Get(ctx, client.ObjectKey{Name: ref.Name, Namespace: controlPlane.Namespace}, &endpoint); err != nil {
 		return "", err
 	}
 	if endpoint.Status.JoinEndpoint != "" {
@@ -1227,13 +1232,14 @@ func (r *ControlPlaneReconciler) ensureGatewayResources(
 
 	// Ensure ControlPlaneEndpoint.
 	var endpoint controlplanev1alpha1.ControlPlaneEndpoint
-	if err := r.Get(ctx, client.ObjectKey{Name: endpointName}, &endpoint); err != nil {
+	if err := r.Get(ctx, client.ObjectKey{Name: endpointName, Namespace: controlPlane.Namespace}, &endpoint); err != nil {
 		if !apierrors.IsNotFound(err) {
 			return err
 		}
 		endpoint = controlplanev1alpha1.ControlPlaneEndpoint{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: endpointName,
+				Name:      endpointName,
+				Namespace: controlPlane.Namespace,
 				OwnerReferences: []metav1.OwnerReference{{
 					APIVersion: controlplanev1alpha1.GroupVersion.String(),
 					Kind:       "ControlPlane",
@@ -1262,14 +1268,14 @@ func (r *ControlPlaneReconciler) ensureGatewayResources(
 	portNum := backendPort
 
 	var route gatewayv1.HTTPRoute
-	if err := r.Get(ctx, client.ObjectKey{Name: routeName, Namespace: backendNamespace}, &route); err != nil {
+	if err := r.Get(ctx, client.ObjectKey{Name: routeName, Namespace: controlPlane.Namespace}, &route); err != nil {
 		if !apierrors.IsNotFound(err) {
 			return err
 		}
 		route = gatewayv1.HTTPRoute{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      routeName,
-				Namespace: backendNamespace,
+				Namespace: controlPlane.Namespace,
 				OwnerReferences: []metav1.OwnerReference{{
 					APIVersion: controlplanev1alpha1.GroupVersion.String(),
 					Kind:       "ControlPlane",

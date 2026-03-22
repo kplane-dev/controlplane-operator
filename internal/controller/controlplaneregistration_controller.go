@@ -67,7 +67,7 @@ func (r *ControlPlaneRegistrationReconciler) Reconcile(ctx context.Context, req 
 	}
 
 	var controlPlane controlplanev1alpha1.ControlPlane
-	if err := r.Get(ctx, client.ObjectKey{Name: registration.Spec.ControlPlaneRef.Name}, &controlPlane); err != nil {
+	if err := r.Get(ctx, client.ObjectKey{Name: registration.Spec.ControlPlaneRef.Name, Namespace: registration.Namespace}, &controlPlane); err != nil {
 		if apierrors.IsNotFound(err) {
 			return r.updateStatus(ctx, &registration, "", nil, conditionRegistrationReady(
 				metav1.ConditionFalse,
@@ -122,13 +122,13 @@ func (r *ControlPlaneRegistrationReconciler) resolveRegistrationEndpoint(
 	controlPlane *controlplanev1alpha1.ControlPlane,
 ) (string, error) {
 	if registration.Spec.EndpointRef != nil && registration.Spec.EndpointRef.Name != "" {
-		return r.resolveEndpointByName(ctx, registration.Spec.EndpointRef.Name)
+		return r.resolveEndpointByName(ctx, registration.Spec.EndpointRef.Name, registration.Namespace)
 	}
 	if controlPlane.Status.Endpoint != "" {
 		return controlPlane.Status.Endpoint, nil
 	}
 	if controlPlane.Spec.EndpointRef != nil && controlPlane.Spec.EndpointRef.Name != "" {
-		return r.resolveEndpointByName(ctx, controlPlane.Spec.EndpointRef.Name)
+		return r.resolveEndpointByName(ctx, controlPlane.Spec.EndpointRef.Name, controlPlane.Namespace)
 	}
 	return "", apierrors.NewNotFound(schema.GroupResource{
 		Group:    controlplanev1alpha1.GroupVersion.Group,
@@ -136,9 +136,9 @@ func (r *ControlPlaneRegistrationReconciler) resolveRegistrationEndpoint(
 	}, "endpoint not yet resolved")
 }
 
-func (r *ControlPlaneRegistrationReconciler) resolveEndpointByName(ctx context.Context, name string) (string, error) {
+func (r *ControlPlaneRegistrationReconciler) resolveEndpointByName(ctx context.Context, name, namespace string) (string, error) {
 	var endpoint controlplanev1alpha1.ControlPlaneEndpoint
-	if err := r.Get(ctx, client.ObjectKey{Name: name}, &endpoint); err != nil {
+	if err := r.Get(ctx, client.ObjectKey{Name: name, Namespace: namespace}, &endpoint); err != nil {
 		return "", err
 	}
 	if endpoint.Status.ExternalEndpoint != "" {

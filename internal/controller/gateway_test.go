@@ -94,7 +94,7 @@ var _ = Describe("Gateway Integration", func() {
 			Expect(k8sClient.Create(ctx, class)).To(Succeed())
 
 			cp := &controlplanev1alpha1.ControlPlane{
-				ObjectMeta: metav1.ObjectMeta{Name: cpName},
+				ObjectMeta: metav1.ObjectMeta{Name: cpName, Namespace: "default"},
 				Spec: controlplanev1alpha1.ControlPlaneSpec{
 					ClassRef: &corev1.LocalObjectReference{
 						Name: className,
@@ -106,19 +106,19 @@ var _ = Describe("Gateway Integration", func() {
 
 		AfterEach(func() {
 			cp := &controlplanev1alpha1.ControlPlane{}
-			if err := k8sClient.Get(ctx, types.NamespacedName{Name: cpName}, cp); err == nil {
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: cpName, Namespace: "default"}, cp); err == nil {
 				cp.Finalizers = nil
 				_ = k8sClient.Update(ctx, cp)
 				_ = k8sClient.Delete(ctx, cp)
 			}
 
 			endpoint := &controlplanev1alpha1.ControlPlaneEndpoint{}
-			if err := k8sClient.Get(ctx, types.NamespacedName{Name: cpName + "-endpoint"}, endpoint); err == nil {
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: cpName + "-endpoint", Namespace: "default"}, endpoint); err == nil {
 				_ = k8sClient.Delete(ctx, endpoint)
 			}
 
 			route := &gatewayv1.HTTPRoute{}
-			if err := k8sClient.Get(ctx, types.NamespacedName{Name: cpName + "-route", Namespace: "kplane-apiserver"}, route); err == nil {
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: cpName + "-route", Namespace: "default"}, route); err == nil {
 				_ = k8sClient.Delete(ctx, route)
 			}
 
@@ -134,12 +134,12 @@ var _ = Describe("Gateway Integration", func() {
 			// First reconcile — will create gateway resources and set endpointRef.
 			// It will then fail on bootstrapVirtualCluster (no real apiserver), which is expected.
 			_, _ = r.Reconcile(ctx, reconcile.Request{
-				NamespacedName: types.NamespacedName{Name: cpName},
+				NamespacedName: types.NamespacedName{Name: cpName, Namespace: "default"},
 			})
 
 			// Verify ControlPlaneEndpoint was created.
 			endpoint := &controlplanev1alpha1.ControlPlaneEndpoint{}
-			err := k8sClient.Get(ctx, types.NamespacedName{Name: cpName + "-endpoint"}, endpoint)
+			err := k8sClient.Get(ctx, types.NamespacedName{Name: cpName + "-endpoint", Namespace: "default"}, endpoint)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(endpoint.Spec.Endpoint).To(ContainSubstring("kplane-apiserver.kplane-apiserver.svc.cluster.local"))
 			Expect(endpoint.Spec.Endpoint).To(ContainSubstring("/clusters/" + cpName + "/control-plane"))
@@ -152,7 +152,7 @@ var _ = Describe("Gateway Integration", func() {
 
 			// Verify HTTPRoute was created.
 			route := &gatewayv1.HTTPRoute{}
-			err = k8sClient.Get(ctx, types.NamespacedName{Name: cpName + "-route", Namespace: "kplane-apiserver"}, route)
+			err = k8sClient.Get(ctx, types.NamespacedName{Name: cpName + "-route", Namespace: "default"}, route)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(route.Spec.Hostnames).To(HaveLen(1))
 			Expect(string(route.Spec.Hostnames[0])).To(Equal(cpName + ".clusters.test.example.com"))
@@ -162,7 +162,7 @@ var _ = Describe("Gateway Integration", func() {
 
 			// Verify the ControlPlane now has endpointRef set.
 			cp := &controlplanev1alpha1.ControlPlane{}
-			err = k8sClient.Get(ctx, types.NamespacedName{Name: cpName}, cp)
+			err = k8sClient.Get(ctx, types.NamespacedName{Name: cpName, Namespace: "default"}, cp)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(cp.Spec.EndpointRef).NotTo(BeNil())
 			Expect(cp.Spec.EndpointRef.Name).To(Equal(cpName + "-endpoint"))
@@ -188,7 +188,7 @@ var _ = Describe("Gateway Integration", func() {
 			Expect(k8sClient.Create(ctx, class)).To(Succeed())
 
 			endpoint := &controlplanev1alpha1.ControlPlaneEndpoint{
-				ObjectMeta: metav1.ObjectMeta{Name: "manual-endpoint"},
+				ObjectMeta: metav1.ObjectMeta{Name: "manual-endpoint", Namespace: "default"},
 				Spec: controlplanev1alpha1.ControlPlaneEndpointSpec{
 					Endpoint: "https://manual.example.com:6443",
 				},
@@ -196,7 +196,7 @@ var _ = Describe("Gateway Integration", func() {
 			Expect(k8sClient.Create(ctx, endpoint)).To(Succeed())
 
 			cp := &controlplanev1alpha1.ControlPlane{
-				ObjectMeta: metav1.ObjectMeta{Name: explicitCPName},
+				ObjectMeta: metav1.ObjectMeta{Name: explicitCPName, Namespace: "default"},
 				Spec: controlplanev1alpha1.ControlPlaneSpec{
 					ClassRef: &corev1.LocalObjectReference{
 						Name: "explicit-class",
@@ -211,14 +211,14 @@ var _ = Describe("Gateway Integration", func() {
 
 		AfterEach(func() {
 			cp := &controlplanev1alpha1.ControlPlane{}
-			if err := k8sClient.Get(ctx, types.NamespacedName{Name: explicitCPName}, cp); err == nil {
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: explicitCPName, Namespace: "default"}, cp); err == nil {
 				cp.Finalizers = nil
 				_ = k8sClient.Update(ctx, cp)
 				_ = k8sClient.Delete(ctx, cp)
 			}
 
 			endpoint := &controlplanev1alpha1.ControlPlaneEndpoint{}
-			if err := k8sClient.Get(ctx, types.NamespacedName{Name: "manual-endpoint"}, endpoint); err == nil {
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: "manual-endpoint", Namespace: "default"}, endpoint); err == nil {
 				_ = k8sClient.Delete(ctx, endpoint)
 			}
 
@@ -232,17 +232,17 @@ var _ = Describe("Gateway Integration", func() {
 			r := newReconciler()
 
 			_, _ = r.Reconcile(ctx, reconcile.Request{
-				NamespacedName: types.NamespacedName{Name: explicitCPName},
+				NamespacedName: types.NamespacedName{Name: explicitCPName, Namespace: "default"},
 			})
 
 			// No auto-created endpoint should exist.
 			autoEndpoint := &controlplanev1alpha1.ControlPlaneEndpoint{}
-			err := k8sClient.Get(ctx, types.NamespacedName{Name: explicitCPName + "-endpoint"}, autoEndpoint)
+			err := k8sClient.Get(ctx, types.NamespacedName{Name: explicitCPName + "-endpoint", Namespace: "default"}, autoEndpoint)
 			Expect(err).To(HaveOccurred()) // should be NotFound
 
 			// No HTTPRoute should exist.
 			route := &gatewayv1.HTTPRoute{}
-			err = k8sClient.Get(ctx, types.NamespacedName{Name: explicitCPName + "-route", Namespace: "kplane-apiserver"}, route)
+			err = k8sClient.Get(ctx, types.NamespacedName{Name: explicitCPName + "-route", Namespace: "default"}, route)
 			Expect(err).To(HaveOccurred()) // should be NotFound
 		})
 	})
@@ -258,7 +258,7 @@ var _ = Describe("Gateway Integration", func() {
 			Expect(k8sClient.Create(ctx, class)).To(Succeed())
 
 			cp := &controlplanev1alpha1.ControlPlane{
-				ObjectMeta: metav1.ObjectMeta{Name: noGwCPName},
+				ObjectMeta: metav1.ObjectMeta{Name: noGwCPName, Namespace: "default"},
 				Spec: controlplanev1alpha1.ControlPlaneSpec{
 					ClassRef: &corev1.LocalObjectReference{
 						Name: "no-gw-class",
@@ -270,7 +270,7 @@ var _ = Describe("Gateway Integration", func() {
 
 		AfterEach(func() {
 			cp := &controlplanev1alpha1.ControlPlane{}
-			if err := k8sClient.Get(ctx, types.NamespacedName{Name: noGwCPName}, cp); err == nil {
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: noGwCPName, Namespace: "default"}, cp); err == nil {
 				cp.Finalizers = nil
 				_ = k8sClient.Update(ctx, cp)
 				_ = k8sClient.Delete(ctx, cp)
@@ -286,15 +286,15 @@ var _ = Describe("Gateway Integration", func() {
 			r := newReconciler()
 
 			_, _ = r.Reconcile(ctx, reconcile.Request{
-				NamespacedName: types.NamespacedName{Name: noGwCPName},
+				NamespacedName: types.NamespacedName{Name: noGwCPName, Namespace: "default"},
 			})
 
 			autoEndpoint := &controlplanev1alpha1.ControlPlaneEndpoint{}
-			err := k8sClient.Get(ctx, types.NamespacedName{Name: noGwCPName + "-endpoint"}, autoEndpoint)
+			err := k8sClient.Get(ctx, types.NamespacedName{Name: noGwCPName + "-endpoint", Namespace: "default"}, autoEndpoint)
 			Expect(err).To(HaveOccurred())
 
 			route := &gatewayv1.HTTPRoute{}
-			err = k8sClient.Get(ctx, types.NamespacedName{Name: noGwCPName + "-route", Namespace: "kplane-apiserver"}, route)
+			err = k8sClient.Get(ctx, types.NamespacedName{Name: noGwCPName + "-route", Namespace: "default"}, route)
 			Expect(err).To(HaveOccurred())
 		})
 	})

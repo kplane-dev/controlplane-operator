@@ -12,7 +12,7 @@ spec:
     listKind: ControlPlaneList
     plural: controlplanes
     singular: controlplane
-  scope: Cluster
+  scope: Namespaced
   versions:
   - additionalPrinterColumns:
     - jsonPath: .spec.mode

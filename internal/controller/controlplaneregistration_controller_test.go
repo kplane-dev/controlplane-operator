@@ -40,19 +40,19 @@ var _ = Describe("ControlPlaneRegistration Controller", func() {
 
 	AfterEach(func() {
 		_ = k8sClient.Delete(ctx, &controlplanev1alpha1.ControlPlaneRegistration{
-			ObjectMeta: metav1.ObjectMeta{Name: registrationName},
+			ObjectMeta: metav1.ObjectMeta{Name: registrationName, Namespace: "default"},
 		})
 		_ = k8sClient.Delete(ctx, &controlplanev1alpha1.ControlPlane{
-			ObjectMeta: metav1.ObjectMeta{Name: controlPlaneName},
+			ObjectMeta: metav1.ObjectMeta{Name: controlPlaneName, Namespace: "default"},
 		})
 		_ = k8sClient.Delete(ctx, &controlplanev1alpha1.ControlPlaneEndpoint{
-			ObjectMeta: metav1.ObjectMeta{Name: endpointName},
+			ObjectMeta: metav1.ObjectMeta{Name: endpointName, Namespace: "default"},
 		})
 	})
 
 	It("resolves endpointRef and kubeconfig from ControlPlane status", func() {
 		endpoint := &controlplanev1alpha1.ControlPlaneEndpoint{
-			ObjectMeta: metav1.ObjectMeta{Name: endpointName},
+			ObjectMeta: metav1.ObjectMeta{Name: endpointName, Namespace: "default"},
 			Spec: controlplanev1alpha1.ControlPlaneEndpointSpec{
 				Endpoint:         "https://internal.example",
 				ExternalEndpoint: "https://external.example",
@@ -61,7 +61,7 @@ var _ = Describe("ControlPlaneRegistration Controller", func() {
 		Expect(k8sClient.Create(ctx, endpoint)).To(Succeed())
 
 		controlPlane := &controlplanev1alpha1.ControlPlane{
-			ObjectMeta: metav1.ObjectMeta{Name: controlPlaneName},
+			ObjectMeta: metav1.ObjectMeta{Name: controlPlaneName, Namespace: "default"},
 			Spec: controlplanev1alpha1.ControlPlaneSpec{
 				EndpointRef: &controlplanev1alpha1.ControlPlaneEndpointReference{
 					Name: endpointName,
@@ -77,7 +77,7 @@ var _ = Describe("ControlPlaneRegistration Controller", func() {
 		Expect(k8sClient.Status().Update(ctx, controlPlane)).To(Succeed())
 
 		registration := &controlplanev1alpha1.ControlPlaneRegistration{
-			ObjectMeta: metav1.ObjectMeta{Name: registrationName},
+			ObjectMeta: metav1.ObjectMeta{Name: registrationName, Namespace: "default"},
 			Spec: controlplanev1alpha1.ControlPlaneRegistrationSpec{
 				ControlPlaneRef: corev1.LocalObjectReference{Name: controlPlaneName},
 				EndpointRef: &controlplanev1alpha1.ControlPlaneEndpointReference{
@@ -92,12 +92,12 @@ var _ = Describe("ControlPlaneRegistration Controller", func() {
 			Scheme: k8sClient.Scheme(),
 		}
 		_, err := reconciler.Reconcile(ctx, reconcile.Request{
-			NamespacedName: types.NamespacedName{Name: registrationName},
+			NamespacedName: types.NamespacedName{Name: registrationName, Namespace: "default"},
 		})
 		Expect(err).NotTo(HaveOccurred())
 
 		var updated controlplanev1alpha1.ControlPlaneRegistration
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: registrationName}, &updated)).To(Succeed())
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: registrationName, Namespace: "default"}, &updated)).To(Succeed())
 		Expect(updated.Status.ResolvedEndpoint).To(Equal("https://external.example"))
 		Expect(updated.Status.ResolvedKubeconfigSecretRef).NotTo(BeNil())
 		Expect(updated.Status.ResolvedKubeconfigSecretRef.Name).To(Equal("cp-kubeconfig"))
@@ -106,7 +106,7 @@ var _ = Describe("ControlPlaneRegistration Controller", func() {
 
 	It("falls back to ControlPlane status endpoint when no endpointRef is provided", func() {
 		controlPlane := &controlplanev1alpha1.ControlPlane{
-			ObjectMeta: metav1.ObjectMeta{Name: controlPlaneName},
+			ObjectMeta: metav1.ObjectMeta{Name: controlPlaneName, Namespace: "default"},
 		}
 		Expect(k8sClient.Create(ctx, controlPlane)).To(Succeed())
 		controlPlane.Status.Endpoint = "https://status-only.example"
@@ -117,7 +117,7 @@ var _ = Describe("ControlPlaneRegistration Controller", func() {
 		Expect(k8sClient.Status().Update(ctx, controlPlane)).To(Succeed())
 
 		registration := &controlplanev1alpha1.ControlPlaneRegistration{
-			ObjectMeta: metav1.ObjectMeta{Name: registrationName},
+			ObjectMeta: metav1.ObjectMeta{Name: registrationName, Namespace: "default"},
 			Spec: controlplanev1alpha1.ControlPlaneRegistrationSpec{
 				ControlPlaneRef: corev1.LocalObjectReference{Name: controlPlaneName},
 			},
@@ -129,12 +129,12 @@ var _ = Describe("ControlPlaneRegistration Controller", func() {
 			Scheme: k8sClient.Scheme(),
 		}
 		_, err := reconciler.Reconcile(ctx, reconcile.Request{
-			NamespacedName: types.NamespacedName{Name: registrationName},
+			NamespacedName: types.NamespacedName{Name: registrationName, Namespace: "default"},
 		})
 		Expect(err).NotTo(HaveOccurred())
 
 		var updated controlplanev1alpha1.ControlPlaneRegistration
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: registrationName}, &updated)).To(Succeed())
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: registrationName, Namespace: "default"}, &updated)).To(Succeed())
 		Expect(updated.Status.ResolvedEndpoint).To(Equal("https://status-only.example"))
 		Expect(updated.Status.ResolvedKubeconfigSecretRef).NotTo(BeNil())
 		Expect(updated.Status.Ready).To(BeTrue())
