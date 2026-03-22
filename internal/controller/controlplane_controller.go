@@ -1210,7 +1210,7 @@ func (r *ControlPlaneReconciler) ensureGatewayResources(
 	backendNS := gatewayv1.Namespace(backendNamespace)
 	pathType := gatewayv1.PathMatchPathPrefix
 	gwHostname := gatewayv1.Hostname(hostname)
-	portNum := gatewayv1.PortNumber(backendPort)
+	portNum := backendPort
 
 	var route gatewayv1.HTTPRoute
 	if err := r.Get(ctx, client.ObjectKey{Name: routeName, Namespace: backendNamespace}, &route); err != nil {
