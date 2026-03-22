@@ -269,7 +269,7 @@ func (r *ControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	if gatewayManaged {
 		// Gateway terminates TLS with a publicly-trusted cert (e.g. Let's Encrypt).
 		// Omit the internal CA so kubectl uses the system CA bundle.
-		externalKubeconfig, err = buildKubeconfig(r.ClusterConfig, externalEndpoint, token)
+		externalKubeconfig, err = buildKubeconfigNoCA(externalEndpoint, token)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
@@ -716,6 +716,32 @@ func kubeconfigSecretName(name string) string {
 
 func buildKubeconfig(cfg *rest.Config, endpoint, token string) ([]byte, error) {
 	return buildKubeconfigWithCA(cfg, endpoint, token, nil)
+}
+
+// buildKubeconfigNoCA builds a kubeconfig that relies on the system CA bundle
+// for TLS verification. Used for external kubeconfigs behind a gateway with a
+// publicly-trusted certificate.
+func buildKubeconfigNoCA(endpoint, token string) ([]byte, error) {
+	kcfg := api.Config{
+		Clusters: map[string]*api.Cluster{
+			"controlplane": {
+				Server: endpoint,
+			},
+		},
+		AuthInfos: map[string]*api.AuthInfo{
+			"admin": {
+				Token: token,
+			},
+		},
+		Contexts: map[string]*api.Context{
+			"controlplane": {
+				Cluster:  "controlplane",
+				AuthInfo: "admin",
+			},
+		},
+		CurrentContext: "controlplane",
+	}
+	return clientcmd.Write(kcfg)
 }
 
 func buildKubeconfigWithCA(cfg *rest.Config, endpoint, token string, caData []byte) ([]byte, error) {
