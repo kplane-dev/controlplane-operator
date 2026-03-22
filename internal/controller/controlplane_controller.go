@@ -185,12 +185,19 @@ func (r *ControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	if err != nil && !apierrors.IsNotFound(err) {
 		return ctrl.Result{}, err
 	}
+	// Determine if gateway manages external routing (path rewrite handled by HTTPRoute).
+	gatewayManaged := classObj != nil && classObj.Spec.Gateway != nil
+
 	if mode == controlplanev1alpha1.ControlPlaneModeVirtual {
 		if endpoint, err = ensureVirtualClusterEndpoint(endpoint, clusterPath); err != nil {
 			return ctrl.Result{}, err
 		}
-		if externalEndpoint, err = ensureVirtualClusterEndpoint(externalEndpoint, clusterPath); err != nil {
-			return ctrl.Result{}, err
+		// When gateway manages routing, the external endpoint stays clean —
+		// the HTTPRoute handles path rewriting to the cluster segment.
+		if !gatewayManaged {
+			if externalEndpoint, err = ensureVirtualClusterEndpoint(externalEndpoint, clusterPath); err != nil {
+				return ctrl.Result{}, err
+			}
 		}
 	}
 	if externalEndpoint == "" {
@@ -550,6 +557,13 @@ func (r *ControlPlaneReconciler) bootstrapVirtualCluster(ctx context.Context, cl
 		},
 	}, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
 		return err
+	}
+
+	// Ensure system namespaces exist before creating bootstrap artifacts.
+	for _, ns := range []string{"kube-system", "kube-public", "kube-node-lease", "default"} {
+		if err := ensureNamespace(ctx, clientset, ns); err != nil {
+			return err
+		}
 	}
 
 	return r.ensureBootstrapArtifacts(ctx, clientset, endpoint, caData)
