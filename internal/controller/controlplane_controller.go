@@ -399,7 +399,8 @@ func (r *ControlPlaneReconciler) ensureManagementNamespace(ctx context.Context, 
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name,
 			Labels: map[string]string{
-				"controlplane.kplane.dev/name": controlPlane.Name,
+				"controlplane.kplane.dev/name":      controlPlane.Name,
+				"controlplane.kplane.dev/namespace": controlPlane.Namespace,
 			},
 		},
 	}
@@ -620,6 +621,7 @@ func (r *ControlPlaneReconciler) upsertKubeconfigSecret(ctx context.Context, con
 			secret.Labels = map[string]string{}
 		}
 		secret.Labels["controlplane.kplane.dev/name"] = controlPlane.Name
+		secret.Labels["controlplane.kplane.dev/namespace"] = controlPlane.Namespace
 		secret.Type = corev1.SecretTypeOpaque
 		if secret.Data == nil {
 			secret.Data = map[string][]byte{}
@@ -628,7 +630,9 @@ func (r *ControlPlaneReconciler) upsertKubeconfigSecret(ctx context.Context, con
 		if len(externalKubeconfig) > 0 {
 			secret.Data["kubeconfig-external"] = externalKubeconfig
 		}
-		return controllerutil.SetControllerReference(controlPlane, secret, r.Scheme)
+		// Owner references cannot cross namespaces; use labels instead.
+		// The finalizer in reconcileDelete handles cleanup.
+		return nil
 	})
 	if err != nil {
 		return nil, err
