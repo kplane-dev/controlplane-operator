@@ -266,7 +266,14 @@ func (r *ControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	var externalKubeconfig []byte
-	if len(sharedCA) > 0 {
+	if gatewayManaged {
+		// Gateway terminates TLS with a publicly-trusted cert (e.g. Let's Encrypt).
+		// Omit the internal CA so kubectl uses the system CA bundle.
+		externalKubeconfig, err = buildKubeconfig(r.ClusterConfig, externalEndpoint, token)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+	} else if len(sharedCA) > 0 {
 		externalKubeconfig, err = buildKubeconfigWithCA(r.ClusterConfig, externalEndpoint, token, sharedCA)
 		if err != nil {
 			return ctrl.Result{}, err
