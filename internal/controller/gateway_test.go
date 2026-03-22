@@ -143,8 +143,7 @@ var _ = Describe("Gateway Integration", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(endpoint.Spec.Endpoint).To(ContainSubstring("kplane-apiserver.kplane-apiserver.svc.cluster.local"))
 			Expect(endpoint.Spec.Endpoint).To(ContainSubstring("/clusters/" + cpName + "/control-plane"))
-			Expect(endpoint.Spec.ExternalEndpoint).To(ContainSubstring(cpName + ".clusters.test.example.com"))
-			Expect(endpoint.Spec.ExternalEndpoint).To(ContainSubstring("/clusters/" + cpName + "/control-plane"))
+			Expect(endpoint.Spec.ExternalEndpoint).To(Equal("https://" + cpName + ".clusters.test.example.com"))
 
 			// Verify owner reference points to the ControlPlane.
 			Expect(endpoint.OwnerReferences).To(HaveLen(1))

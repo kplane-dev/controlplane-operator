@@ -1172,7 +1172,9 @@ func (r *ControlPlaneReconciler) ensureGatewayResources(
 
 	internalEndpoint := fmt.Sprintf("https://%s.%s.svc.cluster.local:%d%s",
 		backendName, backendNamespace, backendPort, fullPath)
-	externalEndpoint := fmt.Sprintf("https://%s%s", hostname, fullPath)
+	// External endpoint omits the path — the HTTPRoute handles mapping
+	// the hostname to the correct path on the backend.
+	externalEndpoint := fmt.Sprintf("https://%s", hostname)
 
 	endpointName := controlPlane.Name + "-endpoint"
 
@@ -1241,7 +1243,16 @@ func (r *ControlPlaneReconciler) ensureGatewayResources(
 					Matches: []gatewayv1.HTTPRouteMatch{{
 						Path: &gatewayv1.HTTPPathMatch{
 							Type:  &pathType,
-							Value: ptr.To(fullPath),
+							Value: ptr.To("/"),
+						},
+					}},
+					Filters: []gatewayv1.HTTPRouteFilter{{
+						Type: gatewayv1.HTTPRouteFilterURLRewrite,
+						URLRewrite: &gatewayv1.HTTPURLRewriteFilter{
+							Path: &gatewayv1.HTTPPathModifier{
+								Type:               gatewayv1.PrefixMatchHTTPPathModifier,
+								ReplacePrefixMatch: ptr.To(fullPath),
+							},
 						},
 					}},
 					BackendRefs: []gatewayv1.HTTPBackendRef{{
