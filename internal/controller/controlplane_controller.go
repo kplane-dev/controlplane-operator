@@ -1411,13 +1411,25 @@ func (r *ControlPlaneReconciler) ensureReferenceGrant(
 }
 
 // renderHostname executes a Go template to produce a hostname for a ControlPlane.
+// Available fields: Name, Namespace, UID, ShortUID (first 8 chars of UID).
 func renderHostname(tmpl string, cp *controlplanev1alpha1.ControlPlane) (string, error) {
 	t, err := template.New("hostname").Parse(tmpl)
 	if err != nil {
 		return "", err
 	}
+	uid := string(cp.UID)
+	shortUID := uid
+	if len(shortUID) > 8 {
+		shortUID = shortUID[:8]
+	}
 	var buf strings.Builder
-	if err := t.Execute(&buf, map[string]string{"Name": cp.Name}); err != nil {
+	data := map[string]string{
+		"Name":      cp.Name,
+		"Namespace": cp.Namespace,
+		"UID":       uid,
+		"ShortUID":  shortUID,
+	}
+	if err := t.Execute(&buf, data); err != nil {
 		return "", err
 	}
 	return buf.String(), nil
