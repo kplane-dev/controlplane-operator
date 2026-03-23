@@ -39,6 +39,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
+	gatewayv1beta1 "sigs.k8s.io/gateway-api/apis/v1beta1"
 
 	controlplanev1alpha1 "github.com/kplane-dev/controlplane-operator/api/v1alpha1"
 	"github.com/kplane-dev/controlplane-operator/internal/config"
@@ -59,6 +60,7 @@ func init() {
 	utilruntime.Must(config.AddToScheme(scheme))
 	utilruntime.Must(config.RegisterDefaults(scheme))
 	utilruntime.Must(gatewayv1.Install(scheme))
+	utilruntime.Must(gatewayv1beta1.Install(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
