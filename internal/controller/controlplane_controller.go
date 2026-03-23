@@ -54,6 +54,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
+	gatewayv1beta1 "sigs.k8s.io/gateway-api/apis/v1beta1"
 
 	controlplanev1alpha1 "github.com/kplane-dev/controlplane-operator/api/v1alpha1"
 	"github.com/kplane-dev/controlplane-operator/internal/config"
@@ -74,6 +75,7 @@ type ControlPlaneReconciler struct {
 // +kubebuilder:rbac:groups=controlplane.kplane.dev,resources=controlplaneendpoints,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=namespaces;secrets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=referencegrants,verbs=get;list;watch;create;update;patch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -1330,6 +1332,16 @@ func (r *ControlPlaneReconciler) ensureGatewayResources(
 		log.Info("created HTTPRoute", "name", routeName, "hostname", hostname)
 	}
 
+	// Ensure ReferenceGrant in the backend namespace when the HTTPRoute
+	// is in a different namespace than the backend Service.
+	if controlPlane.Namespace != backendNamespace {
+		if err := r.ensureReferenceGrant(
+			ctx, controlPlane.Namespace, backendName, backendNamespace,
+		); err != nil {
+			return err
+		}
+	}
+
 	// Patch the ControlPlane to set endpointRef.
 	controlPlane.Spec.EndpointRef = &controlplanev1alpha1.ControlPlaneEndpointReference{
 		Name: endpointName,
@@ -1338,6 +1350,63 @@ func (r *ControlPlaneReconciler) ensureGatewayResources(
 		return fmt.Errorf("failed to set endpointRef on ControlPlane: %w", err)
 	}
 	log.Info("set endpointRef on ControlPlane", "endpointRef", endpointName)
+	return nil
+}
+
+// ensureReferenceGrant creates or updates a ReferenceGrant in the backend
+// namespace that allows HTTPRoutes from the source namespace to reference the
+// backend Service. This is required by Gateway API for cross-namespace refs.
+func (r *ControlPlaneReconciler) ensureReferenceGrant(
+	ctx context.Context,
+	sourceNamespace, backendName, backendNamespace string,
+) error {
+	log := logf.FromContext(ctx)
+	grantName := fmt.Sprintf("allow-%s-httproute", sourceNamespace)
+
+	var grant gatewayv1beta1.ReferenceGrant
+	err := r.Get(ctx, client.ObjectKey{
+		Name: grantName, Namespace: backendNamespace,
+	}, &grant)
+	if apierrors.IsNotFound(err) {
+		grant = gatewayv1beta1.ReferenceGrant{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      grantName,
+				Namespace: backendNamespace,
+			},
+			Spec: gatewayv1beta1.ReferenceGrantSpec{
+				From: []gatewayv1beta1.ReferenceGrantFrom{{
+					Group:     gatewayv1.GroupName,
+					Kind:      "HTTPRoute",
+					Namespace: gatewayv1.Namespace(sourceNamespace),
+				}},
+				To: []gatewayv1beta1.ReferenceGrantTo{{
+					Group: "",
+					Kind:  "Service",
+					Name: ptr.To(
+						gatewayv1.ObjectName(backendName),
+					),
+				}},
+			},
+		}
+		if err := r.Create(ctx, &grant); err != nil {
+			if apierrors.IsAlreadyExists(err) {
+				return nil
+			}
+			return fmt.Errorf(
+				"failed to create ReferenceGrant %s/%s: %w",
+				backendNamespace, grantName, err,
+			)
+		}
+		log.Info("created ReferenceGrant",
+			"name", grantName, "namespace", backendNamespace,
+			"from", sourceNamespace,
+		)
+	} else if err != nil {
+		return fmt.Errorf(
+			"failed to get ReferenceGrant %s/%s: %w",
+			backendNamespace, grantName, err,
+		)
+	}
 	return nil
 }
 
