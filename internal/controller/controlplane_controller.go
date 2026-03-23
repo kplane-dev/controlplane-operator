@@ -1417,10 +1417,10 @@ func renderHostname(tmpl string, cp *controlplanev1alpha1.ControlPlane) (string,
 	if err != nil {
 		return "", err
 	}
-	uid := string(cp.UID)
+	uid := strings.ReplaceAll(string(cp.UID), "-", "")
 	shortUID := uid
-	if len(shortUID) > 8 {
-		shortUID = shortUID[:8]
+	if len(shortUID) > 12 {
+		shortUID = shortUID[:12]
 	}
 	var buf strings.Builder
 	data := map[string]string{
