@@ -37,7 +37,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilrand "k8s.io/apimachinery/pkg/util/rand"
@@ -77,7 +76,6 @@ type ControlPlaneReconciler struct {
 // +kubebuilder:rbac:groups="",resources=namespaces;secrets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=referencegrants,verbs=get;list;watch;create;update;patch
-// +kubebuilder:rbac:groups=gateway.envoyproxy.io,resources=securitypolicies,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -1344,13 +1342,6 @@ func (r *ControlPlaneReconciler) ensureGatewayResources(
 		}
 	}
 
-	// Ensure SecurityPolicy for ext_authz + CORS on this HTTPRoute.
-	if err := r.ensureSecurityPolicy(
-		ctx, controlPlane, routeName, hostname,
-	); err != nil {
-		return err
-	}
-
 	// Patch the ControlPlane to set endpointRef.
 	controlPlane.Spec.EndpointRef = &controlplanev1alpha1.ControlPlaneEndpointReference{
 		Name: endpointName,
@@ -1359,99 +1350,6 @@ func (r *ControlPlaneReconciler) ensureGatewayResources(
 		return fmt.Errorf("failed to set endpointRef on ControlPlane: %w", err)
 	}
 	log.Info("set endpointRef on ControlPlane", "endpointRef", endpointName)
-	return nil
-}
-
-// ensureSecurityPolicy creates a SecurityPolicy targeting the HTTPRoute
-// for ext_authz (JWT validation + impersonation) and CORS.
-func (r *ControlPlaneReconciler) ensureSecurityPolicy(
-	ctx context.Context,
-	controlPlane *controlplanev1alpha1.ControlPlane,
-	routeName, hostname string,
-) error {
-	log := logf.FromContext(ctx)
-	policyName := controlPlane.Name + "-auth"
-
-	policy := &unstructured.Unstructured{}
-	policy.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   "gateway.envoyproxy.io",
-		Version: "v1alpha1",
-		Kind:    "SecurityPolicy",
-	})
-
-	err := r.Get(ctx, client.ObjectKey{
-		Name: policyName, Namespace: controlPlane.Namespace,
-	}, policy)
-	if err == nil {
-		return nil // already exists
-	}
-	if !apierrors.IsNotFound(err) {
-		return fmt.Errorf("get SecurityPolicy: %w", err)
-	}
-
-	// Determine the allowed origin pattern from the hostname.
-	// e.g., abc123.platform.staging.env.kplane.dev → https://*.staging.env.kplane.dev
-	parts := strings.SplitN(hostname, ".", 2)
-	originPattern := "https://*." + parts[len(parts)-1]
-
-	policy.SetName(policyName)
-	policy.SetNamespace(controlPlane.Namespace)
-	policy.SetOwnerReferences([]metav1.OwnerReference{{
-		APIVersion: controlplanev1alpha1.GroupVersion.String(),
-		Kind:       "ControlPlane",
-		Name:       controlPlane.Name,
-		UID:        controlPlane.UID,
-		Controller: ptr.To(true),
-	}})
-
-	spec := map[string]interface{}{
-		"targetRefs": []interface{}{
-			map[string]interface{}{
-				"group": "gateway.networking.k8s.io",
-				"kind":  "HTTPRoute",
-				"name":  routeName,
-			},
-		},
-		"cors": map[string]interface{}{
-			"allowOrigins": []interface{}{originPattern},
-			"allowMethods": []interface{}{
-				"GET", "POST", "PUT", "PATCH",
-				"DELETE", "OPTIONS",
-			},
-			"allowHeaders": []interface{}{
-				"Content-Type", "Authorization", "Cookie",
-			},
-			"allowCredentials": true,
-		},
-		"extAuth": map[string]interface{}{
-			"http": map[string]interface{}{
-				"backendRef": map[string]interface{}{
-					"name":      "kplane-auth",
-					"namespace": "kplane-auth",
-					"port":      int64(80),
-				},
-				"path": "/ext-authz",
-				"headersToBackend": []interface{}{
-					"Cookie",
-				},
-			},
-		},
-	}
-	if err := unstructured.SetNestedField(
-		policy.Object, spec, "spec",
-	); err != nil {
-		return fmt.Errorf("set SecurityPolicy spec: %w", err)
-	}
-
-	if err := r.Create(ctx, policy); err != nil {
-		if apierrors.IsAlreadyExists(err) {
-			return nil
-		}
-		return fmt.Errorf("create SecurityPolicy: %w", err)
-	}
-	log.Info("created SecurityPolicy",
-		"name", policyName, "route", routeName,
-	)
 	return nil
 }
 
