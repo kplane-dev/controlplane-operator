@@ -1418,16 +1418,11 @@ func renderHostname(tmpl string, cp *controlplanev1alpha1.ControlPlane) (string,
 		return "", err
 	}
 	uid := strings.ReplaceAll(string(cp.UID), "-", "")
-	shortUID := uid
-	if len(shortUID) > 12 {
-		shortUID = shortUID[:12]
-	}
 	var buf strings.Builder
 	data := map[string]string{
 		"Name":      cp.Name,
 		"Namespace": cp.Namespace,
 		"UID":       uid,
-		"ShortUID":  shortUID,
 	}
 	if err := t.Execute(&buf, data); err != nil {
 		return "", err
