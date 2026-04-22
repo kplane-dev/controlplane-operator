@@ -103,11 +103,11 @@ func (r *ControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	clusterPath, err := clusterPathForControlPlane(&controlPlane)
 	if err != nil {
 		log.Error(err, "clusterPath validation failed", "clusterPath", clusterPath)
-		return r.updateStatus(ctx, &controlPlane, "", nil,
-			conditionReady(metav1.ConditionFalse, "InvalidClusterPath", err.Error()),
-			conditionAccepted(metav1.ConditionFalse, "InvalidClusterPath", err.Error()),
-			conditionProgrammed(metav1.ConditionFalse, "InvalidClusterPath", err.Error()),
-		)
+		return r.updateStatus(ctx, &controlPlane, "", nil, conditionReady(
+			metav1.ConditionFalse,
+			"InvalidClusterPath",
+			err.Error(),
+		))
 	}
 
 	if controlPlane.DeletionTimestamp != nil {
@@ -139,12 +139,11 @@ func (r *ControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		var cls controlplanev1alpha1.ControlPlaneClass
 		if err := r.Get(ctx, client.ObjectKey{Name: controlPlane.Spec.ClassRef.Name}, &cls); err != nil {
 			if apierrors.IsNotFound(err) {
-				msg := fmt.Sprintf("ControlPlaneClass %q not found", controlPlane.Spec.ClassRef.Name)
-				return r.updateStatus(ctx, &controlPlane, "", nil,
-					conditionReady(metav1.ConditionFalse, "ClassNotFound", msg),
-					conditionAccepted(metav1.ConditionFalse, "ClassNotFound", msg),
-					conditionProgrammed(metav1.ConditionFalse, "ClassNotFound", msg),
-				)
+				return r.updateStatus(ctx, &controlPlane, "", nil, conditionReady(
+					metav1.ConditionFalse,
+					"ClassNotFound",
+					fmt.Sprintf("ControlPlaneClass %q not found", controlPlane.Spec.ClassRef.Name),
+				))
 			}
 			return ctrl.Result{}, err
 		}
@@ -152,12 +151,11 @@ func (r *ControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	if mode != controlplanev1alpha1.ControlPlaneModeVirtual {
-		msg := fmt.Sprintf("mode %q is not supported in v0/v1", mode)
-		return r.updateStatus(ctx, &controlPlane, "", nil,
-			conditionReady(metav1.ConditionFalse, "ModeNotSupported", msg),
-			conditionAccepted(metav1.ConditionFalse, "ModeNotSupported", msg),
-			conditionProgrammed(metav1.ConditionFalse, "ModeNotSupported", msg),
-		)
+		return r.updateStatus(ctx, &controlPlane, "", nil, conditionReady(
+			metav1.ConditionFalse,
+			"ModeNotSupported",
+			fmt.Sprintf("mode %q is not supported in v0/v1", mode),
+		))
 	}
 
 	// If no endpointRef and the class has gateway config, auto-create the
@@ -176,11 +174,11 @@ func (r *ControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	endpoint, err := r.resolveEndpoint(ctx, &controlPlane)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			_, _ = r.updateStatus(ctx, &controlPlane, "", nil,
-				conditionReady(metav1.ConditionFalse, "EndpointPending", err.Error()),
-				conditionAccepted(metav1.ConditionTrue, "Accepted", "control plane configuration is accepted"),
-				conditionProgrammed(metav1.ConditionFalse, "EndpointPending", err.Error()),
-			)
+			_, _ = r.updateStatus(ctx, &controlPlane, "", nil, conditionReady(
+				metav1.ConditionFalse,
+				"EndpointPending",
+				err.Error(),
+			))
 			return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
 		}
 		return ctrl.Result{}, err
@@ -233,19 +231,19 @@ func (r *ControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	if err := r.bootstrapVirtualCluster(ctx, clusterClient, joinEndpoint, sharedCA); err != nil {
 		if isAPIServerNotReady(err) {
-			_, _ = r.updateStatus(ctx, &controlPlane, "", nil,
-				conditionReady(metav1.ConditionFalse, "Bootstrapping", err.Error()),
-				conditionAccepted(metav1.ConditionTrue, "Accepted", "control plane configuration is accepted"),
-				conditionProgrammed(metav1.ConditionFalse, "Bootstrapping", err.Error()),
-			)
+			_, _ = r.updateStatus(ctx, &controlPlane, "", nil, conditionReady(
+				metav1.ConditionFalse,
+				"Bootstrapping",
+				err.Error(),
+			))
 			return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
 		}
 		if apierrors.IsNotFound(err) {
-			_, _ = r.updateStatus(ctx, &controlPlane, "", nil,
-				conditionReady(metav1.ConditionFalse, "Bootstrapping", err.Error()),
-				conditionAccepted(metav1.ConditionTrue, "Accepted", "control plane configuration is accepted"),
-				conditionProgrammed(metav1.ConditionFalse, "Bootstrapping", err.Error()),
-			)
+			_, _ = r.updateStatus(ctx, &controlPlane, "", nil, conditionReady(
+				metav1.ConditionFalse,
+				"Bootstrapping",
+				err.Error(),
+			))
 			return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
 		}
 		return ctrl.Result{}, err
@@ -254,11 +252,11 @@ func (r *ControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	token, err := r.issueAdminToken(ctx, clusterClient)
 	if err != nil {
 		if isAPIServerNotReady(err) {
-			_, _ = r.updateStatus(ctx, &controlPlane, "", nil,
-				conditionReady(metav1.ConditionFalse, "Bootstrapping", err.Error()),
-				conditionAccepted(metav1.ConditionTrue, "Accepted", "control plane configuration is accepted"),
-				conditionProgrammed(metav1.ConditionFalse, "Bootstrapping", err.Error()),
-			)
+			_, _ = r.updateStatus(ctx, &controlPlane, "", nil, conditionReady(
+				metav1.ConditionFalse,
+				"Bootstrapping",
+				err.Error(),
+			))
 			return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
 		}
 		return ctrl.Result{}, err
@@ -294,11 +292,8 @@ func (r *ControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, err
 	}
 
-	return r.updateStatus(ctx, &controlPlane, endpoint, secretRef,
-		conditionReady(metav1.ConditionTrue, "Reconciled", "control plane is ready"),
-		conditionAccepted(metav1.ConditionTrue, "Accepted", "control plane configuration is accepted"),
-		conditionProgrammed(metav1.ConditionTrue, "Programmed", "control plane is programmed"),
-	)
+	ready := conditionReady(metav1.ConditionTrue, "Reconciled", "control plane is ready")
+	return r.updateStatus(ctx, &controlPlane, endpoint, secretRef, ready)
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -647,15 +642,13 @@ func (r *ControlPlaneReconciler) upsertKubeconfigSecret(ctx context.Context, con
 	return &corev1.SecretReference{Name: secret.Name, Namespace: secret.Namespace}, nil
 }
 
-func (r *ControlPlaneReconciler) updateStatus(ctx context.Context, controlPlane *controlplanev1alpha1.ControlPlane, endpoint string, secretRef *corev1.SecretReference, conditions ...metav1.Condition) (ctrl.Result, error) {
+func (r *ControlPlaneReconciler) updateStatus(ctx context.Context, controlPlane *controlplanev1alpha1.ControlPlane, endpoint string, secretRef *corev1.SecretReference, condition metav1.Condition) (ctrl.Result, error) {
 	patch := client.MergeFrom(controlPlane.DeepCopy())
 	controlPlane.Status.Endpoint = endpoint
 	controlPlane.Status.KubeconfigSecretRef = secretRef
 	controlPlane.Status.ObservedGeneration = controlPlane.Generation
-	for _, c := range conditions {
-		c.ObservedGeneration = controlPlane.Generation
-		meta.SetStatusCondition(&controlPlane.Status.Conditions, c)
-	}
+	condition.ObservedGeneration = controlPlane.Generation
+	meta.SetStatusCondition(&controlPlane.Status.Conditions, condition)
 	if err := r.Status().Patch(ctx, controlPlane, patch); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -668,26 +661,7 @@ func conditionReady(status metav1.ConditionStatus, reason, message string) metav
 		Status:             status,
 		Reason:             reason,
 		Message:            message,
-		LastTransitionTime: metav1.Now(),
-	}
-}
-
-func conditionAccepted(status metav1.ConditionStatus, reason, message string) metav1.Condition {
-	return metav1.Condition{
-		Type:               "Accepted",
-		Status:             status,
-		Reason:             reason,
-		Message:            message,
-		LastTransitionTime: metav1.Now(),
-	}
-}
-
-func conditionProgrammed(status metav1.ConditionStatus, reason, message string) metav1.Condition {
-	return metav1.Condition{
-		Type:               "Programmed",
-		Status:             status,
-		Reason:             reason,
-		Message:            message,
+		ObservedGeneration: 0,
 		LastTransitionTime: metav1.Now(),
 	}
 }
