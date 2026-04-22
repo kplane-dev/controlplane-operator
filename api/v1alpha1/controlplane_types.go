@@ -117,9 +117,9 @@ type ControlPlaneStatus struct {
 	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
 	//
 	// Standard condition types include:
-	// - "Available": the resource is fully functional
-	// - "Progressing": the resource is being created or updated
-	// - "Degraded": the resource failed to reach or maintain its desired state
+	// - "Accepted": the spec has been validated and accepted (class exists, mode supported, cluster path valid)
+	// - "Programmed": the control plane has been fully provisioned and is ready to serve requests
+	// - "Ready": legacy condition retained for backwards compatibility; prefer Accepted and Programmed
 	//
 	// The status of each condition is one of True, False, or Unknown.
 	// +listType=map
@@ -133,7 +133,9 @@ type ControlPlaneStatus struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Mode",type=string,JSONPath=`.spec.mode`
 // +kubebuilder:printcolumn:name="Endpoint",type=string,JSONPath=`.status.endpoint`,priority=1
-// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
+// +kubebuilder:printcolumn:name="Accepted",type=string,JSONPath=`.status.conditions[?(@.type=="Accepted")].status`
+// +kubebuilder:printcolumn:name="Programmed",type=string,JSONPath=`.status.conditions[?(@.type=="Programmed")].status`
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`,priority=1
 
 // ControlPlane is the Schema for the controlplanes API
 type ControlPlane struct {
